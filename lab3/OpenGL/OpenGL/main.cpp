@@ -13,8 +13,8 @@ Model* model = NULL;
 const int WIDTH = 800;
 const int HEIGHT = 800;
 const int DEPTH = 255;
-const Vec3f LIGHT_DIR(1, 1, 1);
-const Vec3f CAMERA(0, 1, 3);
+Vec3f LIGHT_DIR(1, 1, 1);
+ Vec3f CAMERA(0, 1, 3);
 const Vec3f CENTER(0, 0, 0);
 const Vec3f UP(0, 1, 0);
 
@@ -22,6 +22,7 @@ Matrix modelView;
 Matrix projection;
 Matrix viewPort;
 
+const float shinyJustice = 100.0f;
 
 Vec3f cross(const Vec3f& v1, const Vec3f& v2) {
     return Vec3f(v1.y * v2.z - v1.z * v2.y,
@@ -64,16 +65,25 @@ Matrix ViewPort(int x, int y, int width, int height) {
     return view;
 }
 
+Vec3f multVec(float n, Vec3f vec) {
+    return Vec3f(vec.x * n, vec.y * n, vec.z * n);
+}
+TGAColor multVecI(float n, Vec3f vec) {
+    return TGAColor(vec.x * n, vec.y * n, vec.z * n);
+}
 
-struct PhongShaderr {
+struct Shader {
     mat<2, 3, float> variyng_uv;
     mat<3, 3, float> varying_normals;
-
+    mat<3, 3, float> varying_pos;
     Vec4f vertex(int nface, int nvert) {
         variyng_uv.set_col(nvert, model->uv(nface, nvert));
 
         Vec3f n = model->normal(nface, nvert).normalize();
         varying_normals.set_col(nvert, n);
+
+        Vec4f v4 = modelView * embed<4>(model->vert(nface, nvert), 1.0f);
+        varying_pos.set_col(nvert, proj<3>(v4));
 
         Vec4f gl_Vertex = embed<4>(model->vert(nface, nvert));
         return viewPort * projection * modelView * gl_Vertex;
@@ -82,9 +92,37 @@ struct PhongShaderr {
     bool fragment(Vec3f bar, TGAColor& color) {
         Vec3f n = (varying_normals * bar).normalize();
         float intensity = std::max(0.f, n * LIGHT_DIR);
-
+        LIGHT_DIR = LIGHT_DIR.normalize();
         Vec2f uv = variyng_uv * bar;
         color = model->diffuse(uv) * intensity;
+
+        float Ka = 0.4f;
+        float Kd = 0.3f;
+        float Ks = 0.3f;
+
+        float normR = color.r() / 255;
+        float normG = color.g() / 255;
+        float normB = color.b() / 255;
+
+        float nx = n.x;
+        float ny = n.y;
+        float nz = n.z;
+
+        Vec3f normColor = Vec3f(normR, normG, normB);
+        Vec3f pos = (varying_pos * bar);
+        Vec3f view = (CAMERA - pos).normalize();
+
+
+        Vec3f amb = multVec(Ka, normColor);  
+        Vec3f diff = multVec(Kd * std::max(n * LIGHT_DIR, 0.f), normColor);
+
+        Vec3f reflectDir = (n * 2.f * (n * LIGHT_DIR) - LIGHT_DIR).normalize();
+        float spec = std::pow(std::max(reflectDir * view, 0.f), shinyJustice);
+        Vec3f specularComponent = Vec3f(Ks * spec, Ks * spec, Ks * spec);
+
+        Vec3f result = multVec(255.0, amb + diff + specularComponent);
+
+        color = TGAColor(result.x, result.y, result.z, color.a());
 
         return false;
     }
@@ -104,7 +142,7 @@ Vec3f barycentric(Vec2f A, Vec2f B, Vec2f C, Vec2f P) {
     return Vec3f(-1, 1, 1); 
 }
 
-void barTriangle(Vec4f *abc, PhongShader &shader, TGAImage& zbuffer, TGAImage& image) {
+void barTriangle(Vec4f *abc, Shader &shader, TGAImage& zbuffer, TGAImage& image) {
     Vec2f areaMin(std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
     Vec2f areaMax(-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max());
     float wInv[3];
@@ -135,11 +173,12 @@ void barTriangle(Vec4f *abc, PhongShader &shader, TGAImage& zbuffer, TGAImage& i
                 int frag_depth = std::max(0, std::min(255, int(z / w + .5)));
       
                 if (alpha < 0 || beta < 0 || gamma < 0 || zbuffer.get(P.x, P.y)[0] > frag_depth) continue;
-                    bool discard = shader.fragment(baryc, color);
-                    if (discard) continue;
 
-                    zbuffer.set(P.x, P.y, TGAColor(frag_depth));
-                    image.set(P.x, P.y, color);
+                bool discard = shader.fragment(baryc, color);
+                if (discard) continue;
+
+                zbuffer.set(P.x, P.y, TGAColor(frag_depth));
+                image.set(P.x, P.y, color);
 
             }
         }
@@ -160,7 +199,7 @@ int main(int argc, char** argv) {
 
    
 
-    PhongShader shader;
+    Shader shader;
 
     modelView = lookAt(CAMERA, CENTER, UP);
     projection = Matrix::identity();

@@ -26,6 +26,11 @@ struct TGAColor {
     unsigned char bgra[4];
     unsigned char bytespp;
 
+    float r() const { return bgra[2]; }
+    float g() const { return bgra[1]; }
+    float b() const { return bgra[0]; }
+    float a() const { return bgra[3]; }
+
     TGAColor() : bgra(), bytespp(1) {
         for (int i = 0; i < 4; i++) bgra[i] = 0;
     }
