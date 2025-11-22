@@ -7,6 +7,7 @@
 
 class Model {
 private:
+    std::string object_name_;
     std::vector<Vec3f> verts_;
     std::vector<std::vector<Vec3i> > faces_; // attention, this Vec3i means vertex/uv/normal
     std::vector<Vec3f> norms_;
@@ -19,6 +20,7 @@ public:
     Model(const char* filename);
     ~Model();
     int nverts();
+   // std::string object_name() const;
     int nfaces();
     Vec3f normal(int iface, int nthvert);
     Vec3f normal(Vec2f uv);

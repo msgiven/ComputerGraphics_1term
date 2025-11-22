@@ -2,49 +2,82 @@
 #include <fstream>
 #include <sstream>
 #include "model.h"
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
+
 
 Model::Model(const char* filename) : verts_(), faces_(), norms_(), uv_(), diffusemap_(), normalmap_(), specularmap_() {
-    std::ifstream in;
-    in.open(filename, std::ifstream::in);
-    if (in.fail()) return;
-    std::string line;
-    while (!in.eof()) {
-        std::getline(in, line);
-        std::istringstream iss(line.c_str());
-        char trash;
-        if (!line.compare(0, 2, "v ")) {
-            iss >> trash;
-            Vec3f v;
-            for (int i = 0; i < 3; i++) iss >> v[i];
-            verts_.push_back(v);
+
+    Assimp::Importer importer;
+    const aiScene* scene = importer.ReadFile(filename,
+        aiProcess_Triangulate |
+        aiProcess_JoinIdenticalVertices |
+        aiProcess_GenSmoothNormals |
+        aiProcess_CalcTangentSpace |
+        aiProcess_FlipUVs);
+
+    if (!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+        std::cerr << "ERROR::ASSIMP::" << importer.GetErrorString() << std::endl;
+        return;
+    }
+
+
+    if (scene->mRootNode->mName.length > 0) {
+        object_name_ = scene->mRootNode->mName.C_Str();
+        std::cout << object_name_;
+    }
+
+
+    for (unsigned int i = 0; i < scene->mNumMeshes; i++) {
+        aiMesh* mesh = scene->mMeshes[i];
+
+
+        size_t current_vert_offset = verts_.size();
+
+
+        for (unsigned int j = 0; j < mesh->mNumVertices; j++) {
+            aiVector3D pos = mesh->mVertices[j];
+            verts_.push_back(Vec3f(pos.x, pos.y, pos.z));
         }
-        else if (!line.compare(0, 3, "vn ")) {
-            iss >> trash >> trash;
-            Vec3f n;
-            for (int i = 0; i < 3; i++) iss >> n[i];
-            norms_.push_back(n);
+
+        if (mesh->HasNormals()) {
+            for (unsigned int j = 0; j < mesh->mNumVertices; j++) {
+                aiVector3D normal = mesh->mNormals[j];
+                norms_.push_back(Vec3f(normal.x, normal.y, normal.z));
+            }
         }
-        else if (!line.compare(0, 3, "vt ")) {
-            iss >> trash >> trash;
-            Vec2f uv;
-            for (int i = 0; i < 2; i++) iss >> uv[i];
-            uv_.push_back(uv);
+
+
+        if (mesh->HasTextureCoords(0)) {
+            for (unsigned int j = 0; j < mesh->mNumVertices; j++) {
+                aiVector3D uv = mesh->mTextureCoords[0][j];
+
+                uv_.push_back(Vec2f(uv.x, uv.y));
+            }
         }
-        else if (!line.compare(0, 2, "f ")) {
+        for (unsigned int j = 0; j < mesh->mNumFaces; j++) {
+            aiFace face = mesh->mFaces[j];
             std::vector<Vec3i> f;
-            Vec3i tmp;
-            iss >> trash;
-            while (iss >> tmp[0] >> trash >> tmp[1] >> trash >> tmp[2]) {
-                for (int i = 0; i < 3; i++) tmp[i]--; // in wavefront obj all indices start at 1, not zero
+            for (unsigned int k = 0; k < face.mNumIndices; k++) {
+                int global_index = face.mIndices[k] + current_vert_offset;
+
+                Vec3i tmp;
+                tmp[0] = global_index;
+                tmp[1] = global_index;
+                tmp[2] = global_index;
+
                 f.push_back(tmp);
             }
             faces_.push_back(f);
         }
     }
+
     std::cerr << "# v# " << verts_.size() << " f# " << faces_.size() << " vt# " << uv_.size() << " vn# " << norms_.size() << std::endl;
-    load_texture(filename, "_diffuse.tga", diffusemap_);
-    load_texture(filename, "_nm.tga", normalmap_);
-    load_texture(filename, "_spec.tga", specularmap_);
+
+    //load_texture(filename, "_diff.tga", diffusemap_);
+    //load_texture(filename, "_ddn.tga", normalmap_);
+    //load_texture(filename, ".tga", specularmap_);
 }
 
 Model::~Model() {}
@@ -71,6 +104,15 @@ Vec3f Model::vert(int iface, int nthvert) {
     return verts_[faces_[iface][nthvert][0]];
 }
 
+Vec2f Model::uv(int iface, int nthvert) {
+    return uv_[faces_[iface][nthvert][1]];
+}
+
+Vec3f Model::normal(int iface, int nthvert) {
+    int idx = faces_[iface][nthvert][2];
+    return norms_[idx].normalize();
+}
+
 void Model::load_texture(std::string filename, const char* suffix, TGAImage& img) {
     std::string texfile(filename);
     size_t dot = texfile.find_last_of(".");
@@ -95,16 +137,7 @@ Vec3f Model::normal(Vec2f uvf) {
     return res;
 }
 
-Vec2f Model::uv(int iface, int nthvert) {
-    return uv_[faces_[iface][nthvert][1]];
-}
-
 float Model::specular(Vec2f uvf) {
     Vec2i uv(uvf[0] * specularmap_.get_width(), uvf[1] * specularmap_.get_height());
     return specularmap_.get(uv[0], uv[1])[0] / 1.f;
-}
-
-Vec3f Model::normal(int iface, int nthvert) {
-    int idx = faces_[iface][nthvert][2];
-    return norms_[idx].normalize();
 }
