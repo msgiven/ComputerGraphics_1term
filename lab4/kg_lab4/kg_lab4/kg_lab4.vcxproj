@@ -142,6 +142,7 @@
     <ClInclude Include="d3dUtil.h" />
     <ClInclude Include="GameTimer.h" />
     <ClInclude Include="MathHelper.h" />
+    <ClInclude Include="tiny_obj_loader.h" />
     <ClInclude Include="UploadBuffer.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

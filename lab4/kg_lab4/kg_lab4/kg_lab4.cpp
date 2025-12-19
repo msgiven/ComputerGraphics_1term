@@ -4,6 +4,7 @@
 #include "MathHelper.h"
 #include "UploadBuffer.h"
 
+
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -44,6 +45,7 @@ private:
     void BuildConstantBuffers();
     void BuildRootSignature();
     void BuildShadersAndInputLayout();
+    void BuildPSO();
 
     std::unique_ptr<MeshGeometry> mBoxGeo = nullptr;
 
@@ -65,6 +67,7 @@ private:
 
     ComPtr<ID3DBlob> mvsByteCode = nullptr;
     ComPtr<ID3DBlob> mpsByteCode = nullptr;
+    ComPtr<ID3D12PipelineState> mPSO = nullptr;
 };
 
 Meow::Meow(HINSTANCE hInstance)
@@ -79,22 +82,43 @@ Meow::~Meow()
 
 bool Meow::Initialize()
 {
-    if (!D3DApp::Initialize())
-        return false;
-
-    BuildBoxGeometry();
+    if(!D3DApp::Initialize())
+		return false;
+		
+    // Reset the command list to prep for initialization commands.
+    ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
+ 
     BuildDescriptorHeaps();
-    BuildConstantBuffers();
+	BuildConstantBuffers();
     BuildRootSignature();
     BuildShadersAndInputLayout();
+    BuildBoxGeometry();
+    BuildPSO();
 
-    return true;
+    ThrowIfFailed(mCommandList->Close());
+	ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
+	mCommandQueue->ExecuteCommandLists(_countof(cmdsLists), cmdsLists);
+
+    FlushCommandQueue();
+
+	return true;
 }
 
 void Meow::OnResize()
 {
     D3DApp::OnResize();
 
+    if (mClientWidth <= 0 || mClientHeight <= 0)
+    {
+        return;
+    }
+    float aspectRatio = static_cast<float>(mClientWidth) / static_cast<float>(mClientHeight);
+
+
+    if (aspectRatio < 0.001f)
+    {
+        return;
+    }
     XMMATRIX P = XMMatrixPerspectiveFovLH(0.25 * MathHelper::Pi, AspectRatio(), 1.0f, 1000.0f);
     XMStoreFloat4x4(&mProj, P);
 }
@@ -110,69 +134,65 @@ void Meow::Update(const GameTimer& gt)
     XMVECTOR pos = XMVectorSet(x, y, z, 1);
     XMVECTOR target = XMVectorZero();
     XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-    XMMATRIX view = XMMatrixLookAtLH(pos, target, up); (pos, target, up);
+    XMMATRIX view = XMMatrixLookAtLH(pos, target, up);
     XMStoreFloat4x4(&mView, view);
 
     XMMATRIX world = XMLoadFloat4x4(&mWorld);
     XMMATRIX proj = XMLoadFloat4x4(&mProj);
 
-    XMMATRIX worlViewProj = world * view * proj;
+    XMMATRIX worldViewProj = world * view * proj;
 
     ObjectConstants objConst;
-    XMStoreFloat4x4(&objConst.WorldViewProj, worlViewProj);
+    //XMStoreFloat4x4(&objConst.WorldViewProj, worldViewProj);
+    XMStoreFloat4x4(&objConst.WorldViewProj, XMMatrixTranspose(worldViewProj));
     mObjectCB->CopyData(0, objConst);
 }
 
 void Meow::Draw(const GameTimer& gt)
 {
     ThrowIfFailed(mDirectCmdListAlloc->Reset());
-    ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
-
-    mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
-    ID3D12DescriptorHeap* descriptorHeaps[] = { mCbvHeap.Get() };
-    mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
-    CD3DX12_GPU_DESCRIPTOR_HANDLE cbv(mCbvHeap->GetGPUDescriptorHandleForHeapStart());
-    //cbv.Offset(0, mCbvSrvUavDescriptorSize);
-    mCommandList->SetGraphicsRootDescriptorTable(0, cbv);
-
+    ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), mPSO.Get()));
 
     CD3DX12_RESOURCE_BARRIER barrierToRT = CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
     mCommandList->ResourceBarrier(1, &barrierToRT);
 
-    mCommandList->RSSetViewports(1, &mScreenViewport);
-    mCommandList->RSSetScissorRects(1, &mScissorRect);
-
-    mCommandList->ClearDepthStencilView(DepthStencilView(), D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
     mCommandList->ClearRenderTargetView(CurrentBackBufferView(), Colors::Bisque, 0, nullptr);
+    mCommandList->ClearDepthStencilView(DepthStencilView(), D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
 
     D3D12_CPU_DESCRIPTOR_HANDLE currentRtv = CurrentBackBufferView();
     D3D12_CPU_DESCRIPTOR_HANDLE dsv = DepthStencilView();
     mCommandList->OMSetRenderTargets(1, &currentRtv, true, &dsv);
 
+    mCommandList->RSSetViewports(1, &mScreenViewport);
+    mCommandList->RSSetScissorRects(1, &mScissorRect);
+
+    mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
+    ID3D12DescriptorHeap* descriptorHeaps[] = { mCbvHeap.Get() };
+    mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+    CD3DX12_GPU_DESCRIPTOR_HANDLE cbv(mCbvHeap->GetGPUDescriptorHandleForHeapStart());
+    mCommandList->SetGraphicsRootDescriptorTable(0, cbv);
+
     D3D12_VERTEX_BUFFER_VIEW vbv = mBoxGeo->VertexBufferView();
     mCommandList->IASetVertexBuffers(0, 1, &vbv);
     D3D12_INDEX_BUFFER_VIEW ibv = mBoxGeo->IndexBufferView();
     mCommandList->IASetIndexBuffer(&ibv);
-    mCommandList->IASetPrimitiveTopology(D3D10_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    mCommandList->DrawIndexedInstanced(mBoxGeo->DrawArgs["box"].IndexCount, 1, mBoxGeo->DrawArgs["box"].StartIndexLocation,  
+    mCommandList->DrawIndexedInstanced(mBoxGeo->DrawArgs["box"].IndexCount, 1, mBoxGeo->DrawArgs["box"].StartIndexLocation,
         mBoxGeo->DrawArgs["box"].BaseVertexLocation, 0);
 
     CD3DX12_RESOURCE_BARRIER barrierToPr = CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     mCommandList->ResourceBarrier(1, &barrierToPr);
 
     ThrowIfFailed(mCommandList->Close());
-    ID3D12CommandList* cmdsLists[] = { mCommandList.Get() }; 
+    ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
     mCommandQueue->ExecuteCommandLists(_countof(cmdsLists), cmdsLists);
 
     ThrowIfFailed(mSwapChain->Present(0, 0));
-    mCurrBackBuffer = (1 + mCurrBackBuffer) % SwapChainBufferCount;
-
-
+    mCurrBackBuffer = (mCurrBackBuffer + 1) % SwapChainBufferCount;
 
     FlushCommandQueue();
 }
-
 
 void Meow::OnMouseDown(WPARAM btnState, int x, int y) {
     mLastMousePos.x = x;
@@ -209,15 +229,15 @@ void Meow::OnMouseUp(WPARAM btnState, int x, int y) {
 }
 
 void Meow::BuildRootSignature() {
-    CD3DX12_ROOT_PARAMETER slotRootPar[1];
+    CD3DX12_ROOT_PARAMETER slotRootParameter[1];
 
     CD3DX12_DESCRIPTOR_RANGE cbvTable;
     cbvTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0);
 
-    slotRootPar[0].InitAsDescriptorTable(1, &cbvTable);
+    slotRootParameter[0].InitAsDescriptorTable(1, &cbvTable);
 
-    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(1, slotRootPar, 0,
-        nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(1, slotRootParameter, 0, nullptr,
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     ComPtr<ID3DBlob> serializedRootSig = nullptr;
     ComPtr<ID3DBlob> errorRootSig = nullptr;
@@ -244,8 +264,8 @@ void Meow::BuildConstantBuffers() {
 
     UINT objCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
     D3D12_GPU_VIRTUAL_ADDRESS cbAdress = mObjectCB->Resource()->GetGPUVirtualAddress();
-    int boxCBufIndex = 0;
-    cbAdress += boxCBufIndex * objCBByteSize;
+    //int boxCBufIndex = 0;
+    //cbAdress += boxCBufIndex * objCBByteSize;
 
     D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc;
     cbvDesc.BufferLocation = cbAdress;
@@ -254,10 +274,26 @@ void Meow::BuildConstantBuffers() {
     md3dDevice->CreateConstantBufferView(&cbvDesc, mCbvHeap->GetCPUDescriptorHandleForHeapStart());
 }
 
-void Meow::BuildShadersAndInputLayout() {
+void Meow::BuildShadersAndInputLayout()
+{
+    std::wstring shaderPath = L"color.hlsl";
 
-    mvsByteCode = d3dUtil::LoadBinary(L"Shaders\\color_vs.cso");
-    mpsByteCode = d3dUtil::LoadBinary(L"Shaders\\color_vs.cso");
+    // Проверка существования файла
+    std::ifstream file(shaderPath);
+    if (!file.good()) {
+        MessageBoxW(nullptr, L"Shader file not found!", L"Error", MB_OK);
+        throw std::runtime_error("Shader file not found");
+    }
+    file.close();
+
+    try {
+        mvsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "VS", "vs_5_0");
+        mpsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "PS", "ps_5_0");
+    }
+    catch (std::exception& e) {
+        MessageBoxA(nullptr, e.what(), "Shader Compilation Error", MB_OK);
+        throw;
+    }
 
     mInputLayoutDesc = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
@@ -267,7 +303,7 @@ void Meow::BuildShadersAndInputLayout() {
 
 void Meow::BuildBoxGeometry() {
 
-    std::array<Vertex, 8> vertices =
+    /*std::array<Vertex, 8> vertices =
     {
         Vertex({ XMFLOAT3(-1.0f, -1.0f, -1.0f), XMFLOAT4(Colors::White) }),
         Vertex({ XMFLOAT3(-1.0f, +1.0f, -1.0f), XMFLOAT4(Colors::Black) }),
@@ -304,7 +340,9 @@ void Meow::BuildBoxGeometry() {
         // bottom face
         4, 0, 3,
         4, 3, 7
-    };
+    };*/
+
+
 
     const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
     const UINT ibByteSize = (UINT)indices.size() * sizeof(std::uint16_t);
@@ -332,6 +370,28 @@ void Meow::BuildBoxGeometry() {
     mBoxGeo->DrawArgs["box"] = subMesh;
 }
 
+void Meow::BuildPSO() {
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.pRootSignature = mRootSignature.Get();
+    psoDesc.VS = { reinterpret_cast<BYTE*>(mvsByteCode->GetBufferPointer()), mvsByteCode->GetBufferSize() };
+    psoDesc.PS = { reinterpret_cast<BYTE*>(mpsByteCode->GetBufferPointer()), mpsByteCode->GetBufferSize() };
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    CD3DX12_RASTERIZER_DESC rsDesc(D3D12_DEFAULT);
+    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    psoDesc.InputLayout = { mInputLayoutDesc.data(), (UINT)mInputLayoutDesc.size()};
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = mBackBufferFormat;
+    psoDesc.DSVFormat = mDepthStencilFormat;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
+    psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
+
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSO)));
+}
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
     PSTR cmdLine, int showCmd)

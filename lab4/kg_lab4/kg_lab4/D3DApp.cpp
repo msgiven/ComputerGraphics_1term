@@ -33,7 +33,7 @@ void D3DApp::ThrowIfFailed(HRESULT hr)
 }
 
 float D3DApp::AspectRatio()const {
-    return static_cast<float>(mClientWidth / mClientHeight);
+    return static_cast<float>(mClientWidth) / mClientHeight;
 }
 
 void D3DApp::Set4xMsaaState(bool value) {
@@ -55,7 +55,6 @@ HWND D3DApp::MainWnd()const {
 
 LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    // Передаем управление в экземпляр приложения
     return D3DApp::GetApp()->MsgProc(hwnd, msg, wParam, lParam);
 }
 
