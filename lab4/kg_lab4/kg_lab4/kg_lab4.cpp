@@ -346,7 +346,7 @@ void Meow::BuildBoxGeometry() {
         4, 0, 3,
         4, 3, 7
     };*/
-    std::string fileName = "D:\\C++Projects\\kg_lab4\\Sponza\\sponza.obj";
+    std::string fileName = "sponza.obj";
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
     std::vector<tinyobj::material_t> materials;
