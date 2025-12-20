@@ -4,6 +4,8 @@
 #include "MathHelper.h"
 #include "UploadBuffer.h"
 
+#define TINYOBJLOADER_IMPLEMENTATION
+#include "tiny_obj_loader.h"
 
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "d3d12.lib")
@@ -15,7 +17,9 @@ using namespace DirectX;
 struct Vertex
 {
     XMFLOAT3 Pos;
-    XMFLOAT4 Color;
+   // XMFLOAT4 Color;
+    XMFLOAT3 Normal;
+    XMFLOAT2 TexC;
 };
 
 struct ObjectConstants {
@@ -51,7 +55,7 @@ private:
 
     float mTheta = 1.5f * XM_PI;
     float mPhi = XM_PIDIV4;
-    float mRadius = 5.0f;
+    float mRadius = 105.0f;
     XMFLOAT4X4 mWorld = MathHelper::Identity4x4();
     XMFLOAT4X4 mView = MathHelper::Identity4x4();
     XMFLOAT4X4 mProj = MathHelper::Identity4x4();
@@ -217,7 +221,7 @@ void Meow::OnMouseMove(WPARAM btnState, int x, int y) {
         float dy = 0.005f * static_cast<float>(y - mLastMousePos.y);
 
         mRadius += dx - dy;
-        mRadius = MathHelper::Clamp(mRadius, 3.0f, 15.0f);
+        mRadius = MathHelper::Clamp(mRadius, 3.0f, 115.0f);
     }
 
     mLastMousePos.x = x;
@@ -297,7 +301,8 @@ void Meow::BuildShadersAndInputLayout()
 
     mInputLayoutDesc = {
         {"POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
-        {"COLOR", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
+        {"NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0},
+        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
     };
 }
 
@@ -341,11 +346,64 @@ void Meow::BuildBoxGeometry() {
         4, 0, 3,
         4, 3, 7
     };*/
+    std::string fileName = "D:\\C++Projects\\kg_lab4\\Sponza\\sponza.obj";
+    tinyobj::attrib_t attrib;
+    std::vector<tinyobj::shape_t> shapes;
+    std::vector<tinyobj::material_t> materials;
+    std::string warn, err;
 
+    bool load = tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, fileName.c_str());
+    if (!warn.empty()) {
+        OutputDebugStringA(warn.c_str());
+    }
+    if (!err.empty()) {
+        OutputDebugStringA(err.c_str());
+    }
+    if (!load) {
+        MessageBoxA(nullptr, "Failed to load/parse .obj", "Error", MB_OK);
+        return;
+    }
 
+    std::vector<Vertex> vertices;
+    std::vector<std::uint32_t> indices;
+
+    for (const auto& shape : shapes) {
+        for (const auto& index : shape.mesh.indices) {
+            Vertex v;
+
+            v.Pos.x = attrib.vertices[3 * index.vertex_index + 0];
+            v.Pos.y = attrib.vertices[3 * index.vertex_index + 1];
+            v.Pos.z = attrib.vertices[3 * index.vertex_index + 2];
+
+            v.Pos.x *= 0.01f; 
+            v.Pos.y *= 0.01f; 
+            v.Pos.z *= 0.01f;
+
+            if (index.normal_index >= 0) {
+                v.Normal.x = attrib.normals[3 * index.normal_index + 0];
+                v.Normal.y = attrib.normals[3 * index.normal_index + 1];
+                v.Normal.z = attrib.normals[3 * index.normal_index + 2];
+            }
+            else {
+                v.Normal = { 0.0f,1.0f,0.0f };
+            }
+
+            if (index.texcoord_index >= 0) {
+                v.TexC.x = attrib.texcoords[2 * index.texcoord_index + 0];
+                v.TexC.y = attrib.texcoords[2 * index.texcoord_index + 1];
+            }
+            else {
+                v.TexC = { 0.0f, 0.0f };
+            }
+
+           // v.Color = XMFLOAT4(0.8f, 0.7f, 0.6f, 1.0f);
+            vertices.push_back(v);
+            indices.push_back((std::uint32_t)indices.size());
+        }
+    }
 
     const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
-    const UINT ibByteSize = (UINT)indices.size() * sizeof(std::uint16_t);
+    const UINT ibByteSize = (UINT)indices.size() * sizeof(std::uint32_t);
 
     mBoxGeo = std::make_unique<MeshGeometry>();
     mBoxGeo->Name = "mBoxGeo";
@@ -359,7 +417,7 @@ void Meow::BuildBoxGeometry() {
 
     mBoxGeo->VertexByteStride = sizeof(Vertex);
     mBoxGeo->VertexBufferByteSize = vbByteSize;
-    mBoxGeo->IndexFormat = DXGI_FORMAT_R16_UINT;
+    mBoxGeo->IndexFormat = DXGI_FORMAT_R32_UINT;//DXGI_FORMAT_R16_UINT;
     mBoxGeo->IndexBufferByteSize = ibByteSize;
 
     SubMeshGeometry subMesh;
