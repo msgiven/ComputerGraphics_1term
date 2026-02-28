@@ -1,0 +1,66 @@
+## Visual Studio ##
+.vs/
+*.vcxproj.user
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+## Build results ##
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+build/
+bin/
+obj/
+[Bb]uild/
+[Bb]in/
+[Oo]bj/
+
+## Visual Studio Code ##
+.vscode/
+
+## Rider ##
+.idea/
+
+## OS generated files ##
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.DS_Store
+*.AppleDouble
+*.LSOverride
+
+## CMake ##
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cbp
+*.ncb
+*.opensdf
+*.sdf
+*.ipch
+*.iobj
+*.pdb
+*.idb
+*.ilk
+*.exp
+*.lib
+*.obj
+*.dll
+*.exe
+*.app
+*.o
+*.a
+*.so
+*.dylib
+
+## Logs ##
+*.log
+
+# Backup files
+*~
+*.bak
+*.swp
