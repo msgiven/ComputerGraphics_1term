@@ -22,6 +22,8 @@
 #include "d3dx12.h"
 #include "DDSTextureLoader.h"
 #include "MathHelper.h"
+		 
+
 
 using namespace DirectX;
 using namespace DirectX::PackedVector;
@@ -98,6 +100,112 @@ struct PassConstants {
 	XMFLOAT4 AmbientLight = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 	Light Lights[MAX_LIGHT_AMOUNT];
+};
+
+struct GBuffer {
+	ComPtr<ID3D12Resource> DiffuseTex = nullptr;
+	ComPtr<ID3D12Resource> NormalTex = nullptr;
+	ComPtr<ID3D12Resource> Pos = nullptr;
+
+	// Вместо Diligent используем стандартные кучи
+	ComPtr<ID3D12DescriptorHeap> mSrvDescriptorHeap = nullptr;
+	ComPtr<ID3D12DescriptorHeap> mRtvDescriptorHeap = nullptr;
+
+	// Храним базовый GPU-хендл для передачи в шейдер (SetGraphicsRootDescriptorTable)
+	D3D12_GPU_DESCRIPTOR_HANDLE mSrvBaseGpuHandle;
+
+	D3D12_CPU_DESCRIPTOR_HANDLE DiffRTV;
+	D3D12_CPU_DESCRIPTOR_HANDLE NormalRTV;
+	D3D12_CPU_DESCRIPTOR_HANDLE PosRTV;
+
+	GBuffer(ID3D12Device* device, int width, int height) {
+		D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
+		rtvHeapDesc.NumDescriptors = 3;
+		rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
+		rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+		ThrowIfFailed(device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mRtvDescriptorHeap)));
+
+		// 2. Создание SRV кучи (замена Diligent)
+		D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
+		srvHeapDesc.NumDescriptors = 3;
+		srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+		srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; // Важно для использования в шейдерах
+		ThrowIfFailed(device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));
+
+		mSrvBaseGpuHandle = mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
+
+		UINT srvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+		CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+
+		// 3. Создание ресурсов (текстур)
+		auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+		auto resDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM, width, height, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+
+		D3D12_CLEAR_VALUE optCV = {};
+		optCV.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		optCV.Color[0] = 0.0f; optCV.Color[1] = 0.0f; optCV.Color[2] = 0.0f; optCV.Color[3] = 1.0f;
+
+		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&DiffuseTex));
+
+		resDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		optCV.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&NormalTex));
+		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&Pos));
+
+		// 4. Создание SRV (Shader Resource Views)
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+		srvDesc.Texture2D.MipLevels = 1;
+
+		srvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		device->CreateShaderResourceView(DiffuseTex.Get(), &srvDesc, srvHandle);
+
+		srvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		srvHandle.Offset(1, srvSize);
+		device->CreateShaderResourceView(NormalTex.Get(), &srvDesc, srvHandle);
+
+		srvHandle.Offset(1, srvSize);
+		device->CreateShaderResourceView(Pos.Get(), &srvDesc, srvHandle);
+
+		// 5. Создание RTV (Render Target Views)
+		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+		UINT rtvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+
+		D3D12_RENDER_TARGET_VIEW_DESC rtvDesc = {};
+		rtvDesc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+
+		rtvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+		device->CreateRenderTargetView(DiffuseTex.Get(), &rtvDesc, rtvHandle);
+		DiffRTV = rtvHandle;
+
+		rtvDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+		rtvHandle.Offset(1, rtvSize);
+		device->CreateRenderTargetView(NormalTex.Get(), &rtvDesc, rtvHandle);
+		NormalRTV = rtvHandle;
+
+		rtvHandle.Offset(1, rtvSize);
+		device->CreateRenderTargetView(Pos.Get(), &rtvDesc, rtvHandle);
+		PosRTV = rtvHandle;
+	}
+
+	void TransitToOpaqueRenderingState(ComPtr<ID3D12GraphicsCommandList>& cmdList) {
+		D3D12_RESOURCE_BARRIER barriers[3] = {
+			CD3DX12_RESOURCE_BARRIER::Transition(DiffuseTex.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
+			CD3DX12_RESOURCE_BARRIER::Transition(NormalTex.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
+			CD3DX12_RESOURCE_BARRIER::Transition(Pos.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)
+		};
+		cmdList->ResourceBarrier(3, barriers);
+	}
+
+	void TransitToLightRenderingState(ComPtr<ID3D12GraphicsCommandList>& cmdList) {
+		D3D12_RESOURCE_BARRIER barriers[3] = {
+			CD3DX12_RESOURCE_BARRIER::Transition(DiffuseTex.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(NormalTex.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE),
+			CD3DX12_RESOURCE_BARRIER::Transition(Pos.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE)
+		};
+		cmdList->ResourceBarrier(3, barriers);
+	}
 };
 
 

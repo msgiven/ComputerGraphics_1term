@@ -62,7 +62,7 @@ struct VertexIn
 {
     float3 PosL : POSITION;
     float3 NormalL : NORMAL;
-    float2 TexC : TEXCOORD; // 1. Принимаем UV из C++
+    float2 TexC : TEXCOORD; 
 };
 
 struct VertexOut
@@ -70,7 +70,14 @@ struct VertexOut
     float4 PosH : SV_POSITION;
     float3 PosW : POSITION;
     float3 NormalW : NORMAL;
-    float2 TexC : TEXCOORD; // 2. Готовим для передачи в пиксельный шейдер
+    float2 TexC : TEXCOORD; 
+};
+
+struct GBufferOut
+{
+    float4 Diffuse : SV_Target0;
+    float4 Normal : SV_Target1;
+    float4 Pos : SV_Target2;
 };
 
 VertexOut VS(VertexIn vin)
@@ -86,17 +93,19 @@ VertexOut VS(VertexIn vin)
     return vout;
 }
 
-float4 PS(VertexOut pin) : SV_Target
+GBufferOut PS(VertexOut pin) : SV_Target
 {
+    GBufferOut gbuf;
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamAnisotropicWrap, pin.TexC) * gDiffuseAlbedo;
-	
-    // Interpolating normal can unnormalize it, so renormalize it.
-    pin.NormalW = normalize(pin.NormalW);
+    gbuf.Diffuse = diffuseAlbedo;
 
-    // Vector from point being lit to eye. 
+    pin.NormalW = normalize(pin.NormalW);
+    gbuf.Normal = float4(pin.NormalW, 0.0f);
+    gbuf.Pos = float4(pin.PosW, 1.0f);
+ 
     float3 toEyeW = normalize(gEyePosW - pin.PosW);
 
-    // Light terms.
+
     float4 ambient = gAmbientLight * diffuseAlbedo;
 
     const float shininess = 1.0f - gRoughness;
@@ -107,9 +116,9 @@ float4 PS(VertexOut pin) : SV_Target
 
     float4 litColor = ambient + directLight;
 
-    // Common convention to take alpha from diffuse albedo.
+
     litColor.a = diffuseAlbedo.a;
 
-    return litColor;
-
+    //return litColor;
+    return gbuf;
 }

@@ -4,6 +4,7 @@
 #include <dxgi1_6.h>
 #include "d3dx12.h" 
 
+
 D3DApp* D3DApp::mApp = nullptr;
 D3DApp* D3DApp::GetApp()
 {
@@ -382,7 +383,6 @@ void D3DApp::CalculateFrameStats() {
         SetWindowText(mhMainWnd, windowText.c_str());
     }
 }
-
 
 LRESULT D3DApp::MsgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {

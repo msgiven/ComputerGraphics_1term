@@ -7,11 +7,12 @@
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
+
 #include <assimp/postprocess.h>
+#include <DirectXColors.h>
 
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
-
 
 #pragma comment(lib, "dxguid.lib")
 #pragma comment(lib, "d3d12.lib")
@@ -45,6 +46,8 @@ public:
     virtual void OnMouseUp(WPARAM btnState, int x, int y) override;
     virtual void OnMouseMove(WPARAM btnState, int x, int y) override;
 
+    ComPtr<ID3D12Device> GetDevice();
+
 
 private:
     void LoadModelAndTextures();
@@ -55,9 +58,13 @@ private:
     void UpdateMaterialCBs(const GameTimer& gt);
     void AnimateMaterials(const GameTimer& gt);
     void BuildRootSignature();
+    void BuildScreenQuadRootSignature();
     void BuildShadersAndInputLayout();
     void BuildPSO();
+    void BuildScreenQuadPSO();
     void UpdatePassCB(const GameTimer& gt);
+
+    GBuffer* mgBuffer;
 
     XMFLOAT3 mSunThetaPhi = { 1.25f * XM_PI, XM_PIDIV4, 0.0f };
 
@@ -103,10 +110,15 @@ private:
     std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayoutDesc;
 
     ComPtr<ID3D12RootSignature> mRootSignature;
+    ComPtr<ID3D12RootSignature> mScreenQuadRootSig;
 
     ComPtr<ID3DBlob> mvsByteCode = nullptr;
     ComPtr<ID3DBlob> mpsByteCode = nullptr;
     ComPtr<ID3D12PipelineState> mPSO = nullptr;
+
+    ComPtr<ID3DBlob> mvsLightByteCode = nullptr;
+    ComPtr<ID3DBlob> mpsLightByteCode = nullptr;
+    ComPtr<ID3D12PipelineState> mLightPSO = nullptr;
 
     ComPtr<ID3DBlob> mvsWaveByteCode = nullptr;
     ComPtr<ID3DBlob> mpsWaveByteCode = nullptr;
@@ -117,6 +129,7 @@ private:
     std::vector<std::string> mTextureOrder;
     std::unique_ptr<MeshGeometry> mModelGeo = nullptr;
     std::vector<RenderItem*> mCurtainRitems;
+
 };
 
 Meow::Meow(HINSTANCE hInstance)
@@ -142,6 +155,8 @@ bool Meow::Initialize()
     BuildRootSignature();
     BuildShadersAndInputLayout();
     BuildPSO();
+
+    mgBuffer = new GBuffer(md3dDevice.Get(), mClientWidth, mClientHeight);
 
     ThrowIfFailed(mCommandList->Close());
     ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
@@ -245,6 +260,13 @@ void Meow::Draw(const GameTimer& gt)
     ThrowIfFailed(cmdListAlloc->Reset());
     ThrowIfFailed(mCommandList->Reset(cmdListAlloc, mPSO.Get()));
 
+
+    mgBuffer->TransitToOpaqueRenderingState(mCommandList); //////////////ggggggggggg
+    const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+    mCommandList->ClearRenderTargetView(mgBuffer->DiffRTV, clearColor, 0, nullptr);
+    mCommandList->ClearRenderTargetView(mgBuffer->NormalRTV, clearColor, 0, nullptr);
+    mCommandList->ClearRenderTargetView(mgBuffer->PosRTV, clearColor, 0, nullptr);
+
     mCommandList->RSSetViewports(1, &mScreenViewport);
     mCommandList->RSSetScissorRects(1, &mScissorRect);
 
@@ -255,8 +277,9 @@ void Meow::Draw(const GameTimer& gt)
     mCommandList->ClearDepthStencilView(DepthStencilView(), D3D12_CLEAR_FLAG_DEPTH | D3D12_CLEAR_FLAG_STENCIL, 1.0f, 0, 0, nullptr);
 
     auto rtv = CurrentBackBufferView();
+    D3D12_CPU_DESCRIPTOR_HANDLE grtvs[] = { mgBuffer->DiffRTV, mgBuffer->NormalRTV, mgBuffer->PosRTV };
     auto dsv = DepthStencilView();
-    mCommandList->OMSetRenderTargets(1, &rtv, true, &dsv);
+    mCommandList->OMSetRenderTargets(3, grtvs, true, &dsv);
 
     ID3D12DescriptorHeap* descriptorHeaps[] = { mSrvDescriptorHeap.Get() };
     mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
@@ -290,9 +313,9 @@ void Meow::Draw(const GameTimer& gt)
     }
 
 
-    mCommandList->SetPipelineState(mWavePSO.Get());
+    //mCommandList->SetPipelineState(mWavePSO.Get());
 
-    for (auto ri : mCurtainRitems) {
+    /*for (auto ri : mCurtainRitems) {
         auto vbv = ri->Geo->VertexBufferView();
         auto ibv = ri->Geo->IndexBufferView();
         mCommandList->IASetVertexBuffers(0, 1, &vbv);
@@ -308,7 +331,39 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->SetGraphicsRootConstantBufferView(3, mMaterialCB->Resource()->GetGPUVirtualAddress() + ri->Mat->matCBIndex * matCBByteSize);
 
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
-    }
+    }*/
+
+
+
+    mgBuffer->TransitToLightRenderingState(mCommandList);
+    
+    auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        mgBuffer->Pos.Get(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    mCommandList->ResourceBarrier(1, &barrier);
+
+
+    auto backBufferRtv = CurrentBackBufferView();
+    mCommandList->OMSetRenderTargets(1, &backBufferRtv, false, nullptr);
+
+
+    mCommandList->ClearRenderTargetView(backBufferRtv, Colors::LightSteelBlue, 0, nullptr);
+
+
+    mCommandList->SetPipelineState(mLightPSO.Get());
+    mCommandList->SetGraphicsRootSignature(mScreenQuadRootSig.Get());
+
+    ID3D12DescriptorHeap* heaps[] = { mgBuffer->mSrvDescriptorHeap.Get() };
+    mCommandList->SetDescriptorHeaps(_countof(heaps), heaps);
+    mCommandList->SetGraphicsRootDescriptorTable(0, mgBuffer->mSrvBaseGpuHandle);
+
+
+    mCommandList->IASetVertexBuffers(0, 0, nullptr); 
+    mCommandList->IASetIndexBuffer(nullptr);
+    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    mCommandList->DrawInstanced(3, 1, 0, 0);
+
 
     auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     mCommandList->ResourceBarrier(1, &barrier2);
@@ -400,6 +455,28 @@ void Meow::BuildRootSignature() {
     ThrowIfFailed(hr);
     ThrowIfFailed(md3dDevice->CreateRootSignature(0, serializedRootSig->GetBufferPointer(), serializedRootSig->GetBufferSize(), IID_PPV_ARGS(&mRootSignature)));
 
+}
+
+void Meow::BuildScreenQuadRootSignature()
+{
+    CD3DX12_DESCRIPTOR_RANGE texTable;
+    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0);
+
+    CD3DX12_ROOT_PARAMETER slotRootParameter[1];
+    slotRootParameter[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
+
+    auto staticSamplers = GetStaticSamplers();
+
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(1, slotRootParameter,
+        (UINT)staticSamplers.size(), staticSamplers.data(),
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+    ComPtr<ID3DBlob> serializedRootSig = nullptr;
+    ComPtr<ID3DBlob> errorBlob = nullptr;
+    D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serializedRootSig, &errorBlob);
+
+    md3dDevice->CreateRootSignature(0, serializedRootSig->GetBufferPointer(),
+        serializedRootSig->GetBufferSize(), IID_PPV_ARGS(&mScreenQuadRootSig));
 }
 
 void Meow::BuildDescriptorHeaps()
@@ -512,15 +589,19 @@ void Meow::UpdatePassCB(const GameTimer& gt)
 void Meow::BuildShadersAndInputLayout()
 {
     std::wstring shaderPath = L"color.hlsl";
-    std::wstring waveShaderPath = L"wave.hlsl";
+    std::wstring shaderDisplayPath = L"display.hlsl";
+    //std::wstring waveShaderPath = L"wave.hlsl";
 
     try {
  
         mvsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "VS", "vs_5_0");
         mpsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "PS", "ps_5_0");
+
+        mvsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "VS", "vs_5_0");
+        mpsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "PS", "ps_5_0");
        
-        mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
-        mpsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "PS", "ps_5_0");
+        //mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
+        //mpsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "PS", "ps_5_0");
     }
     catch (std::exception& e) {
         MessageBoxA(nullptr, e.what(), "Shader Compilation Error", MB_OK);
@@ -688,8 +769,10 @@ void Meow::BuildPSO() {
     psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
     psoDesc.InputLayout = { mInputLayoutDesc.data(), (UINT)mInputLayoutDesc.size() };
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = mBackBufferFormat;
+    psoDesc.NumRenderTargets = 3;
+    psoDesc.RTVFormats[0] = mBackBufferFormat;     
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R32G32B32A32_FLOAT;  
+    psoDesc.RTVFormats[2] = DXGI_FORMAT_R32G32B32A32_FLOAT;
     psoDesc.DSVFormat = mDepthStencilFormat;
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
@@ -697,11 +780,42 @@ void Meow::BuildPSO() {
 
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSO)));
 
-    psoDesc.VS = { reinterpret_cast<BYTE*>(mvsWaveByteCode->GetBufferPointer()), mvsWaveByteCode->GetBufferSize() };
-    psoDesc.PS = { reinterpret_cast<BYTE*>(mpsWaveByteCode->GetBufferPointer()), mpsWaveByteCode->GetBufferSize() };
-
+    //psoDesc.VS = { reinterpret_cast<BYTE*>(mvsWaveByteCode->GetBufferPointer()), mvsWaveByteCode->GetBufferSize() };
+    //psoDesc.PS = { reinterpret_cast<BYTE*>(mpsWaveByteCode->GetBufferPointer()), mpsWaveByteCode->GetBufferSize() };
+    //psoDesc.VS = { reinterpret_cast<BYTE*>(mvsWaveByteCode->GetBufferPointer())};
+    //psoDesc.PS = { reinterpret_cast<BYTE*>(mpsWaveByteCode->GetBufferPointer())};
 
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mWavePSO)));
+}
+
+void Meow::BuildScreenQuadPSO()
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
+    ZeroMemory(&psoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
+
+
+    psoDesc.VS = { reinterpret_cast<BYTE*>(mvsLightByteCode->GetBufferPointer()), mvsLightByteCode->GetBufferSize() };
+    psoDesc.PS = { reinterpret_cast<BYTE*>(mpsLightByteCode->GetBufferPointer()), mpsLightByteCode->GetBufferSize() };
+
+    psoDesc.InputLayout = { nullptr, 0 };
+    psoDesc.pRootSignature = mScreenQuadRootSig.Get();
+
+    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+
+
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = mBackBufferFormat;
+    psoDesc.SampleDesc.Count = 1;
+
+    md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mLightPSO));
 }
 std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> Meow::GetStaticSamplers()
 {
@@ -759,6 +873,10 @@ std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> Meow::GetStaticSamplers()
         anisotropicWrap, anisotropicClamp };
 }
 
+ComPtr<ID3D12Device> Meow::GetDevice() {
+    return md3dDevice;
+}
+
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
     PSTR cmdLine, int showCmd)
@@ -781,4 +899,5 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
         MessageBoxA(nullptr, e.what(), "DirectX Application Failed", MB_OK);
         return 0;
     }
+
 }
