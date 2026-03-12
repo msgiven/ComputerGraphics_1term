@@ -153,8 +153,10 @@ bool Meow::Initialize()
     BuildDescriptorHeaps();
     BuildConstantBuffers();
     BuildRootSignature();
+    BuildScreenQuadRootSignature();
     BuildShadersAndInputLayout();
     BuildPSO();
+    BuildScreenQuadPSO();
 
     mgBuffer = new GBuffer(md3dDevice.Get(), mClientWidth, mClientHeight);
 
@@ -589,7 +591,7 @@ void Meow::UpdatePassCB(const GameTimer& gt)
 void Meow::BuildShadersAndInputLayout()
 {
     std::wstring shaderPath = L"color.hlsl";
-    std::wstring shaderDisplayPath = L"display.hlsl";
+    std::wstring shaderDisplayPath = L"Display.hlsl";
     //std::wstring waveShaderPath = L"wave.hlsl";
 
     try {
@@ -772,7 +774,7 @@ void Meow::BuildPSO() {
     psoDesc.NumRenderTargets = 3;
     psoDesc.RTVFormats[0] = mBackBufferFormat;     
     psoDesc.RTVFormats[1] = DXGI_FORMAT_R32G32B32A32_FLOAT;  
-    psoDesc.RTVFormats[2] = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    psoDesc.RTVFormats[2] = DXGI_FORMAT_R32_FLOAT;
     psoDesc.DSVFormat = mDepthStencilFormat;
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;

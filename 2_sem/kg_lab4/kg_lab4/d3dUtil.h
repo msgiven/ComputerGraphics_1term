@@ -150,6 +150,9 @@ struct GBuffer {
 		resDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
 		optCV.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
 		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&NormalTex));
+
+		resDesc.Format = DXGI_FORMAT_R32_FLOAT;
+		optCV.Format = DXGI_FORMAT_R32_FLOAT;
 		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&Pos));
 
 		// 4. Создание SRV (Shader Resource Views)
@@ -165,6 +168,7 @@ struct GBuffer {
 		srvHandle.Offset(1, srvSize);
 		device->CreateShaderResourceView(NormalTex.Get(), &srvDesc, srvHandle);
 
+		srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
 		srvHandle.Offset(1, srvSize);
 		device->CreateShaderResourceView(Pos.Get(), &srvDesc, srvHandle);
 
@@ -184,6 +188,7 @@ struct GBuffer {
 		device->CreateRenderTargetView(NormalTex.Get(), &rtvDesc, rtvHandle);
 		NormalRTV = rtvHandle;
 
+		rtvDesc.Format = DXGI_FORMAT_R32_FLOAT;
 		rtvHandle.Offset(1, rtvSize);
 		device->CreateRenderTargetView(Pos.Get(), &rtvDesc, rtvHandle);
 		PosRTV = rtvHandle;
