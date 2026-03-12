@@ -516,6 +516,7 @@ void Meow::BuildDescriptorHeaps()
         md3dDevice->CreateShaderResourceView(resource.Get(), &srvDesc, hDescriptor);
         hDescriptor.Offset(1, srvSize);
     }
+
 }
 
 void Meow::BuildConstantBuffers() {
@@ -591,6 +592,21 @@ void Meow::UpdatePassCB(const GameTimer& gt)
 
     XMStoreFloat3(&mMainPassCB.Lights[0].Direction, lightDir);
     mMainPassCB.Lights[0].Strength = { 0.5f, 0.5f, 0.9f };
+    XMStoreFloat3(&mMainPassCB.Lights[0].Direction, XMVector3Normalize(lightDir));
+    mMainPassCB.Lights[0].Strength = { 0.45f, 0.45f, 0.40f };
+
+    mMainPassCB.Lights[1].Position = { 0.0f, 4.0f, -2.0f };
+    mMainPassCB.Lights[1].Strength = { 1.0f, 0.75f, 0.55f };
+    mMainPassCB.Lights[1].FalloffStart = 1.0f;
+    mMainPassCB.Lights[1].FalloffEnd = 25.0f;
+
+    mMainPassCB.Lights[2].Position = { -2.0f, 5.0f, 1.0f };
+    XMVECTOR spotDir = XMVector3Normalize(XMLoadFloat3(&mEyePos) - XMLoadFloat3(&mMainPassCB.Lights[2].Position));
+    XMStoreFloat3(&mMainPassCB.Lights[2].Direction, spotDir);
+    mMainPassCB.Lights[2].Strength = { 0.65f, 0.70f, 1.0f };
+    mMainPassCB.Lights[2].FalloffStart = 0.5f;
+    mMainPassCB.Lights[2].FalloffEnd = 35.0f;
+    mMainPassCB.Lights[2].SpotPower = 40.0f;
 
     auto currPassCB = mPassCB.get();
     currPassCB->CopyData(0, mMainPassCB);

@@ -1,6 +1,17 @@
 #ifndef MaxLights
     #define MaxLights 16
 #endif
+#ifndef NUM_DIR_LIGHTS
+    #define NUM_DIR_LIGHTS 1
+#endif
+
+#ifndef NUM_POINT_LIGHTS
+    #define NUM_POINT_LIGHTS 1
+#endif
+
+#ifndef NUM_SPOT_LIGHTS
+    #define NUM_SPOT_LIGHTS 1
+#endif
 
 #include "D:\C++Projects\kg_lab4\Shaders\light.hlsl"
 
