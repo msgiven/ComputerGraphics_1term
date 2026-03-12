@@ -101,7 +101,7 @@ GBufferOut PS(VertexOut pin) : SV_Target
 
     pin.NormalW = normalize(pin.NormalW);
     gbuf.Normal = float4(pin.NormalW, 0.0f);
-    gbuf.Pos = float4(pin.PosW, 1.0f);
+    gbuf.Pos = pin.PosH.z / pin.PosH.w;
  
     float3 toEyeW = normalize(gEyePosW - pin.PosW);
 
