@@ -211,6 +211,9 @@ struct GBuffer {
 		};
 		cmdList->ResourceBarrier(3, barriers);
 	}
+	void OnResize(int width, int height) {
+
+	}
 };
 
 

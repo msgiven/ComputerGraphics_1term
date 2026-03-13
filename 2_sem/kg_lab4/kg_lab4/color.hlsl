@@ -3,7 +3,7 @@
 #endif
 
 #ifndef NUM_POINT_LIGHTS
-    #define NUM_POINT_LIGHTS 1
+    #define NUM_POINT_LIGHTS 2
 #endif
 
 #ifndef NUM_SPOT_LIGHTS
@@ -101,7 +101,7 @@ GBufferOut PS(VertexOut pin) : SV_Target
 
     pin.NormalW = normalize(pin.NormalW);
     gbuf.Normal = float4(pin.NormalW, 0.0f);
-    gbuf.Pos = pin.PosH.z / pin.PosH.w;
+    gbuf.Pos = pin.PosH.z;
  
     float3 toEyeW = normalize(gEyePosW - pin.PosW);
 

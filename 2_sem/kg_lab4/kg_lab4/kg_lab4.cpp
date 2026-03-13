@@ -315,9 +315,9 @@ void Meow::Draw(const GameTimer& gt)
     }
 
 
-    //mCommandList->SetPipelineState(mWavePSO.Get());
+    mCommandList->SetPipelineState(mWavePSO.Get());
 
-    /*for (auto ri : mCurtainRitems) {
+    for (auto ri : mCurtainRitems) {
         auto vbv = ri->Geo->VertexBufferView();
         auto ibv = ri->Geo->IndexBufferView();
         mCommandList->IASetVertexBuffers(0, 1, &vbv);
@@ -333,7 +333,7 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->SetGraphicsRootConstantBufferView(3, mMaterialCB->Resource()->GetGPUVirtualAddress() + ri->Mat->matCBIndex * matCBByteSize);
 
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
-    }*/
+    }
 
 
 
@@ -595,18 +595,19 @@ void Meow::UpdatePassCB(const GameTimer& gt)
     XMStoreFloat3(&mMainPassCB.Lights[0].Direction, XMVector3Normalize(lightDir));
     mMainPassCB.Lights[0].Strength = { 0.45f, 0.45f, 0.40f };
 
-    mMainPassCB.Lights[1].Position = { 0.0f, 4.0f, -2.0f };
-    mMainPassCB.Lights[1].Strength = { 1.0f, 0.75f, 0.55f };
-    mMainPassCB.Lights[1].FalloffStart = 1.0f;
-    mMainPassCB.Lights[1].FalloffEnd = 25.0f;
+    mMainPassCB.Lights[1].Position = { 6.0f, 6.0f, -6.0f };
+    mMainPassCB.Lights[1].Strength = { 0.95f, 0.75f, 0.60f };
+    mMainPassCB.Lights[1].FalloffStart = 5.0f;
+    mMainPassCB.Lights[1].FalloffEnd = 70.0f;
 
-    mMainPassCB.Lights[2].Position = { -2.0f, 5.0f, 1.0f };
-    XMVECTOR spotDir = XMVector3Normalize(XMLoadFloat3(&mEyePos) - XMLoadFloat3(&mMainPassCB.Lights[2].Position));
+
+    mMainPassCB.Lights[2].Position = { 140.0f, 14.0f, 12.0f };
+    XMVECTOR spotDir = XMVector3Normalize(XMVectorSet(0.7f, -1.0f, -0.7f, 0.0f));
     XMStoreFloat3(&mMainPassCB.Lights[2].Direction, spotDir);
-    mMainPassCB.Lights[2].Strength = { 0.65f, 0.70f, 1.0f };
-    mMainPassCB.Lights[2].FalloffStart = 0.5f;
-    mMainPassCB.Lights[2].FalloffEnd = 35.0f;
-    mMainPassCB.Lights[2].SpotPower = 40.0f;
+    mMainPassCB.Lights[2].Strength = { 0.3f, 0.5f, 1.0f };
+    mMainPassCB.Lights[2].FalloffStart = 5.0f;
+    mMainPassCB.Lights[2].FalloffEnd = 100.0f;
+    mMainPassCB.Lights[2].SpotPower = 24.0f;
 
     auto currPassCB = mPassCB.get();
     currPassCB->CopyData(0, mMainPassCB);
@@ -617,7 +618,7 @@ void Meow::BuildShadersAndInputLayout()
 {
     std::wstring shaderPath = L"color.hlsl";
     std::wstring shaderDisplayPath = L"Display.hlsl";
-    //std::wstring waveShaderPath = L"wave.hlsl";
+    std::wstring waveShaderPath = L"wave.hlsl";
 
     try {
  
@@ -627,8 +628,8 @@ void Meow::BuildShadersAndInputLayout()
         mvsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "VS", "vs_5_0");
         mpsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "PS", "ps_5_0");
        
-        //mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
-        //mpsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "PS", "ps_5_0");
+        mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
+        mpsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "PS", "ps_5_0");
     }
     catch (std::exception& e) {
         MessageBoxA(nullptr, e.what(), "Shader Compilation Error", MB_OK);
@@ -807,10 +808,8 @@ void Meow::BuildPSO() {
 
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSO)));
 
-    //psoDesc.VS = { reinterpret_cast<BYTE*>(mvsWaveByteCode->GetBufferPointer()), mvsWaveByteCode->GetBufferSize() };
-    //psoDesc.PS = { reinterpret_cast<BYTE*>(mpsWaveByteCode->GetBufferPointer()), mpsWaveByteCode->GetBufferSize() };
-    //psoDesc.VS = { reinterpret_cast<BYTE*>(mvsWaveByteCode->GetBufferPointer())};
-    //psoDesc.PS = { reinterpret_cast<BYTE*>(mpsWaveByteCode->GetBufferPointer())};
+    psoDesc.VS = { reinterpret_cast<BYTE*>(mvsWaveByteCode->GetBufferPointer()), mvsWaveByteCode->GetBufferSize() };
+    psoDesc.PS = { reinterpret_cast<BYTE*>(mpsWaveByteCode->GetBufferPointer()), mpsWaveByteCode->GetBufferSize() };
 
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mWavePSO)));
 }
