@@ -110,7 +110,7 @@ private:
     std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayoutDesc;
 
     ComPtr<ID3D12RootSignature> mRootSignature;
-    ComPtr<ID3D12RootSignature> mScreenQuadRootSig;
+    ComPtr<ID3D12RootSignature> mLightRootSig;
 
     ComPtr<ID3DBlob> mvsByteCode = nullptr;
     ComPtr<ID3DBlob> mpsByteCode = nullptr;
@@ -186,6 +186,11 @@ void Meow::OnResize()
     }
     XMMATRIX P = XMMatrixPerspectiveFovLH(0.25 * MathHelper::Pi, AspectRatio(), 1.0f, 1000.0f);
     XMStoreFloat4x4(&mProj, P);
+
+    if (mgBuffer)
+    {
+        mgBuffer->OnResize(md3dDevice.Get(), mClientWidth, mClientHeight);
+    }
 }
 
 
@@ -354,7 +359,7 @@ void Meow::Draw(const GameTimer& gt)
 
 
     mCommandList->SetPipelineState(mLightPSO.Get());
-    mCommandList->SetGraphicsRootSignature(mScreenQuadRootSig.Get());
+    mCommandList->SetGraphicsRootSignature(mLightRootSig.Get());
 
     ID3D12DescriptorHeap* heaps[] = { mgBuffer->mSrvDescriptorHeap.Get() };
     mCommandList->SetDescriptorHeaps(_countof(heaps), heaps);
@@ -487,7 +492,7 @@ void Meow::BuildScreenQuadRootSignature()
     ThrowIfFailed(hr);
 
     ThrowIfFailed(md3dDevice->CreateRootSignature(0, serializedRootSig->GetBufferPointer(),
-        serializedRootSig->GetBufferSize(), IID_PPV_ARGS(&mScreenQuadRootSig)));
+        serializedRootSig->GetBufferSize(), IID_PPV_ARGS(&mLightRootSig)));
 }
 
 void Meow::BuildDescriptorHeaps()
@@ -565,9 +570,6 @@ void Meow::UpdatePassCB(const GameTimer& gt)
     XMMATRIX proj = XMLoadFloat4x4(&mProj);
 
     XMMATRIX viewProj = XMMatrixMultiply(view, proj);
-    /*XMMATRIX invView = XMMatrixInverse(&XMMatrixDeterminant(view), view);
-    XMMATRIX invProj = XMMatrixInverse(&XMMatrixDeterminant(proj), proj);
-    XMMATRIX invViewProj = XMMatrixInverse(&XMMatrixDeterminant(viewProj), viewProj);*/
     XMMATRIX invView = XMMatrixInverse(nullptr, view);
     XMMATRIX invProj = XMMatrixInverse(nullptr, proj);
     XMMATRIX invViewProj = XMMatrixInverse(nullptr, viewProj);
@@ -824,7 +826,7 @@ void Meow::BuildScreenQuadPSO()
     psoDesc.PS = { reinterpret_cast<BYTE*>(mpsLightByteCode->GetBufferPointer()), mpsLightByteCode->GetBufferSize() };
 
     psoDesc.InputLayout = { nullptr, 0 };
-    psoDesc.pRootSignature = mScreenQuadRootSig.Get();
+    psoDesc.pRootSignature = mLightRootSig.Get();
 
     psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);

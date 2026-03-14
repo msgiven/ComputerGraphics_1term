@@ -1,5 +1,5 @@
 #ifndef MaxLights
-    #define MaxLights 16
+    #define MaxLights 1300
 #endif
 #ifndef NUM_DIR_LIGHTS
     #define NUM_DIR_LIGHTS 1
@@ -15,7 +15,6 @@
 
 #include "D:\C++Projects\kg_lab4\Shaders\light.hlsl"
 
-// Текстуры G-Buffer
 Texture2D gDiffuseMap : register(t0);
 Texture2D gNormalMap : register(t1);
 Texture2D gDepthMap : register(t2);

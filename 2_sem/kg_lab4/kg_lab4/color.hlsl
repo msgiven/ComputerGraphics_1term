@@ -87,8 +87,6 @@ VertexOut VS(VertexIn vin)
     vout.PosW = posW.xyz;
     vout.PosH = mul(float4(vin.PosL, 1.0f), gWorldViewProj);
     vout.NormalW = vin.NormalL;
-    vout.TexC = vin.TexC; 
-    float4 texC = mul(float4(vin.TexC, 0.0f, 1.0f), float4(1.0f, 1.0f, 1.0f, 1.0f));
     vout.TexC = mul(float4(vin.TexC, 0.0f, 1.0f), gMatTransform).xy;
     return vout;
 }
@@ -102,23 +100,6 @@ GBufferOut PS(VertexOut pin) : SV_Target
     pin.NormalW = normalize(pin.NormalW);
     gbuf.Normal = float4(pin.NormalW, 0.0f);
     gbuf.Pos = pin.PosH.z;
- 
-    float3 toEyeW = normalize(gEyePosW - pin.PosW);
 
-
-    float4 ambient = gAmbientLight * diffuseAlbedo;
-
-    const float shininess = 1.0f - gRoughness;
-    Material mat = { diffuseAlbedo, gFresnelR0, shininess };
-    float3 shadowFactor = 1.0f;
-    float4 directLight = ComputeLighting(gLights, mat, pin.PosW,
-        pin.NormalW, toEyeW, shadowFactor);
-
-    float4 litColor = ambient + directLight;
-
-
-    litColor.a = diffuseAlbedo.a;
-
-    //return litColor;
     return gbuf;
 }
