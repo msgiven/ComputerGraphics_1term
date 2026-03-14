@@ -119,7 +119,7 @@ float4 PS(VertexOut pin) : SV_Target
         directLightColor += ComputeSpotLight(gLights[i], mat, posW, normalW, toEyeW);
     }
 
-    float4 directLight = float4(directLightColor, 0.0f)
+    float4 directLight = float4(directLightColor, 0.0f);
 
     float4 litColor = (gAmbientLight * diffuseAlbedo) + directLight;
     float3 debugColor = float3(0, 0, 0);

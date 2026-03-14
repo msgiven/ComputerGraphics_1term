@@ -45,8 +45,13 @@ cbuffer cbPass : register(b1)
     float gTotalTime;
     float gDeltaTime;
     float4 gAmbientLight;
+    
+    uint gNumDirLights;
+    uint gNumPointLights;
+    uint gNumSpotLights;
+    uint gNumLightsTotal;
 
-    Light gLights[MaxLights];
+    //Light gLights[MaxLights];
 };
 
 cbuffer cbMaterial : register(b2)

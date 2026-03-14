@@ -3,7 +3,8 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include "d3dx12.h" 
-
+#include <cstdio>
+#include <stdexcept>
 
 D3DApp* D3DApp::mApp = nullptr;
 D3DApp* D3DApp::GetApp()
@@ -29,7 +30,10 @@ void D3DApp::ThrowIfFailed(HRESULT hr)
 {
     if (FAILED(hr))
     {
-        throw std::exception("HRESULT failed");
+        char message[64] = {};
+        std::snprintf(message, sizeof(message), "HRESULT failed (hr=0x%08X)", static_cast<unsigned int>(hr));
+        throw std::runtime_error(message);
+        //throw std::exception("HRESULT failed");
     }
 }
 

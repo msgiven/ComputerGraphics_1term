@@ -7,6 +7,8 @@
 
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
+#include <stdexcept>
+#include <string>
 
 #include <assimp/postprocess.h>
 #include <DirectXColors.h>
@@ -704,9 +706,11 @@ void Meow::BuildShadersAndInputLayout()
         mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
         mpsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "PS", "ps_5_0");
     }
-    catch (std::exception& e) {
+    /*catch (std::exception& e) {
         MessageBoxA(nullptr, e.what(), "Shader Compilation Error", MB_OK);
-        throw;
+        throw;*/
+    catch (const std::exception& e) {
+        throw std::runtime_error(std::string("Shader compilation failed: ") + e.what());
     }
 
     mInputLayoutDesc = {

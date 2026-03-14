@@ -22,7 +22,8 @@
 #include "d3dx12.h"
 #include "DDSTextureLoader.h"
 #include "MathHelper.h"
-		 
+#include <cstdio>
+#include <stdexcept>
 
 
 using namespace DirectX;
@@ -35,7 +36,11 @@ inline void ThrowIfFailed(HRESULT hr)
 {
 	if (FAILED(hr))
 	{
-		throw std::exception("DirectX call failed");
+		char message[64] = {};
+		std::snprintf(message, sizeof(message), "DirectX call failed (hr=0x%08X)", static_cast<unsigned int>(hr));
+		throw std::runtime_error(message);
+	
+		//throw std::exception("DirectX call failed");
 	}
 }
 
