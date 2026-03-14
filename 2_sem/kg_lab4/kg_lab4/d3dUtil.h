@@ -99,7 +99,10 @@ struct PassConstants {
 
 	XMFLOAT4 AmbientLight = { 0.0f, 0.0f, 0.0f, 1.0f };
 
-	Light Lights[MAX_LIGHT_AMOUNT];
+	UINT NumDirLights = 0;
+	UINT NumPointLights = 0;
+	UINT NumSpotLights = 0;
+	UINT NumLightsTotal = 0;
 };
 
 struct GBuffer {
@@ -127,7 +130,7 @@ struct GBuffer {
 
 		
 		D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-		srvHeapDesc.NumDescriptors = 3;
+		srvHeapDesc.NumDescriptors = 4;
 		srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 		srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; // Важно для использования в шейдерах
 		ThrowIfFailed(device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));
@@ -276,6 +279,24 @@ struct GBuffer {
 		device->CreateRenderTargetView(Pos.Get(), &rtvDesc, rtvHandle);
 		PosRTV = rtvHandle;
 
+	}
+
+	void UpdateLightSrv(ID3D12Device* device, ID3D12Resource* lightBuffer, UINT lightCount, UINT lightStride)
+	{
+		UINT srvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+		CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+		srvHandle.Offset(3, srvSize);
+
+		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+		srvDesc.Buffer.FirstElement = 0;
+		srvDesc.Buffer.NumElements = lightCount;
+		srvDesc.Buffer.StructureByteStride = lightStride;
+		srvDesc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+
+		device->CreateShaderResourceView(lightBuffer, &srvDesc, srvHandle);
 	}
 };
 

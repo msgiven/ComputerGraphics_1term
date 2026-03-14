@@ -1,4 +1,4 @@
-#define NOMINMAX
+//#define NOMINMAX
 #include "D3DApp.h"
 #include <DirectXColors.h> 
 #include "d3dUtil.h"
@@ -41,7 +41,6 @@ public:
     virtual void Update(const GameTimer& gt) override;
     virtual void Draw(const GameTimer& gt) override;
 
-    // Обработчики мыши (пустые заглушки для примера)
     virtual void OnMouseDown(WPARAM btnState, int x, int y) override;
     virtual void OnMouseUp(WPARAM btnState, int x, int y) override;
     virtual void OnMouseMove(WPARAM btnState, int x, int y) override;
@@ -58,11 +57,15 @@ private:
     void UpdateMaterialCBs(const GameTimer& gt);
     void AnimateMaterials(const GameTimer& gt);
     void BuildRootSignature();
-    void BuildScreenQuadRootSignature();
+    void BuildLightRootSignature();
     void BuildShadersAndInputLayout();
     void BuildPSO();
     void BuildScreenQuadPSO();
     void UpdatePassCB(const GameTimer& gt);
+    void BuildDeferredLights();
+    void AddDirectionalDeferredLight(const XMFLOAT3& direction, const XMFLOAT3& strength);
+    void AddPointDeferredLight(const XMFLOAT3& position, const XMFLOAT3& strength, float falloffStart, float falloffEnd);
+    void AddSpotDeferredLight(const XMFLOAT3& position, const XMFLOAT3& direction, const XMFLOAT3& strength, float falloffStart, float falloffEnd, float spotPower);
 
     GBuffer* mgBuffer;
 
@@ -130,6 +133,12 @@ private:
     std::unique_ptr<MeshGeometry> mModelGeo = nullptr;
     std::vector<RenderItem*> mCurtainRitems;
 
+    std::unique_ptr<UploadBuffer<Light>> mLightSB;
+    std::vector<Light> mDeferredLights;
+    UINT mNumDirLights = 0;
+    UINT mNumPointLights = 0;
+    UINT mNumSpotLights = 0;
+
 };
 
 Meow::Meow(HINSTANCE hInstance)
@@ -153,13 +162,13 @@ bool Meow::Initialize()
     BuildDescriptorHeaps();
     BuildConstantBuffers();
     BuildRootSignature();
-    BuildScreenQuadRootSignature();
+    BuildLightRootSignature();
     BuildShadersAndInputLayout();
     BuildPSO();
     BuildScreenQuadPSO();
 
     mgBuffer = new GBuffer(md3dDevice.Get(), mClientWidth, mClientHeight);
-
+    BuildDeferredLights();
     ThrowIfFailed(mCommandList->Close());
     ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
     mCommandQueue->ExecuteCommandLists(_countof(cmdsLists), cmdsLists);
@@ -466,10 +475,10 @@ void Meow::BuildRootSignature() {
 
 }
 
-void Meow::BuildScreenQuadRootSignature()
+void Meow::BuildLightRootSignature()
 {
     CD3DX12_DESCRIPTOR_RANGE texTable;
-    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0);
+    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0);
 
     CD3DX12_ROOT_PARAMETER slotRootParameter[2];
     slotRootParameter[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
@@ -564,6 +573,75 @@ void Meow::UpdateMaterialCBs(const GameTimer& gt) {
     }
 }
 
+void Meow::AddDirectionalDeferredLight(const XMFLOAT3& direction, const XMFLOAT3& strength)
+{
+    Light light;
+    light.Direction = direction;
+    light.Strength = strength;
+    mDeferredLights.push_back(light);
+    ++mNumDirLights;
+}
+
+void Meow::AddPointDeferredLight(const XMFLOAT3& position, const XMFLOAT3& strength, float falloffStart, float falloffEnd)
+{
+    Light light;
+    light.Position = position;
+    light.Strength = strength;
+    light.FalloffStart = falloffStart;
+    light.FalloffEnd = falloffEnd;
+    mDeferredLights.push_back(light);
+    ++mNumPointLights;
+}
+
+void Meow::AddSpotDeferredLight(const XMFLOAT3& position, const XMFLOAT3& direction, const XMFLOAT3& strength, float falloffStart, float falloffEnd, float spotPower)
+{
+    Light light;
+    light.Position = position;
+    light.Direction = direction;
+    light.Strength = strength;
+    light.FalloffStart = falloffStart;
+    light.FalloffEnd = falloffEnd;
+    light.SpotPower = spotPower;
+    mDeferredLights.push_back(light);
+    ++mNumSpotLights;
+}
+
+void Meow::BuildDeferredLights()
+{
+    constexpr UINT kPointLights = 1200;
+
+    mDeferredLights.clear();
+    mNumDirLights = 0;
+    mNumPointLights = 0;
+    mNumSpotLights = 0;
+    mDeferredLights.reserve(kPointLights + 2);
+
+    XMVECTOR lightDir = -MathHelper::SphericalToCartesian(1.0f, mSunTheta, mSunPhi);
+    XMFLOAT3 dirNorm;
+    XMStoreFloat3(&dirNorm, XMVector3Normalize(lightDir));
+    AddDirectionalDeferredLight(dirNorm, XMFLOAT3(0.45f, 0.45f, 0.40f));
+
+    for (UINT i = 0; i < kPointLights; ++i)
+    {
+        const float x = -180.0f + (i % 60) * 6.0f;
+        const float z = -180.0f + (i / 60) * 12.0f;
+        AddPointDeferredLight(XMFLOAT3(x, 8.0f, z), XMFLOAT3(0.10f, 0.08f, 0.06f), 2.0f, 24.0f);
+    }
+
+    XMVECTOR spotDir = XMVector3Normalize(XMVectorSet(0.7f, -1.0f, -0.7f, 0.0f));
+    XMFLOAT3 spotDirNorm;
+    XMStoreFloat3(&spotDirNorm, spotDir);
+    AddSpotDeferredLight(XMFLOAT3(140.0f, 14.0f, 12.0f), spotDirNorm, XMFLOAT3(0.3f, 0.5f, 1.0f), 5.0f, 100.0f,  24.0f);
+
+    mLightSB = std::make_unique<UploadBuffer<Light>>(md3dDevice.Get(), static_cast<UINT>(mDeferredLights.size()), false);
+    for (UINT i = 0; i < mDeferredLights.size(); ++i)
+    {
+        mLightSB->CopyData(i, mDeferredLights[i]);
+    }
+
+    mgBuffer->UpdateLightSrv(md3dDevice.Get(), mLightSB->Resource(), static_cast<UINT>(mDeferredLights.size()), sizeof(Light));
+}
+
 void Meow::UpdatePassCB(const GameTimer& gt)
 {
     XMMATRIX view = XMLoadFloat4x4(&mView);
@@ -590,26 +668,19 @@ void Meow::UpdatePassCB(const GameTimer& gt)
     mMainPassCB.DeltaTime = gt.DeltaTime();
     mMainPassCB.AmbientLight = { 0.25f, 0.25f, 0.35f, 1.0f };
 
+   // XMVECTOR lightDir = -MathHelper::SphericalToCartesian(1.0f, mSunTheta, mSunPhi);
+
+    mMainPassCB.NumDirLights = mNumDirLights;
+    mMainPassCB.NumPointLights = mNumPointLights;
+    mMainPassCB.NumSpotLights = mNumSpotLights;
+    mMainPassCB.NumLightsTotal = static_cast<UINT>(mDeferredLights.size());
+
     XMVECTOR lightDir = -MathHelper::SphericalToCartesian(1.0f, mSunTheta, mSunPhi);
-
-    XMStoreFloat3(&mMainPassCB.Lights[0].Direction, lightDir);
-    mMainPassCB.Lights[0].Strength = { 0.5f, 0.5f, 0.9f };
-    XMStoreFloat3(&mMainPassCB.Lights[0].Direction, XMVector3Normalize(lightDir));
-    mMainPassCB.Lights[0].Strength = { 0.45f, 0.45f, 0.40f };
-
-    mMainPassCB.Lights[1].Position = { 6.0f, 6.0f, -6.0f };
-    mMainPassCB.Lights[1].Strength = { 0.95f, 0.75f, 0.60f };
-    mMainPassCB.Lights[1].FalloffStart = 5.0f;
-    mMainPassCB.Lights[1].FalloffEnd = 70.0f;
-
-
-    mMainPassCB.Lights[2].Position = { 140.0f, 14.0f, 12.0f };
-    XMVECTOR spotDir = XMVector3Normalize(XMVectorSet(0.7f, -1.0f, -0.7f, 0.0f));
-    XMStoreFloat3(&mMainPassCB.Lights[2].Direction, spotDir);
-    mMainPassCB.Lights[2].Strength = { 0.3f, 0.5f, 1.0f };
-    mMainPassCB.Lights[2].FalloffStart = 5.0f;
-    mMainPassCB.Lights[2].FalloffEnd = 100.0f;
-    mMainPassCB.Lights[2].SpotPower = 24.0f;
+    XMStoreFloat3(&mDeferredLights[0].Direction, XMVector3Normalize(lightDir));
+    if (mLightSB)
+    {
+        mLightSB->CopyData(0, mDeferredLights[0]);
+    }
 
     auto currPassCB = mPassCB.get();
     currPassCB->CopyData(0, mMainPassCB);

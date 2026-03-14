@@ -18,6 +18,7 @@
 Texture2D gDiffuseMap : register(t0);
 Texture2D gNormalMap : register(t1);
 Texture2D gDepthMap : register(t2);
+StructuredBuffer<Light> gLights : register(t3);
 
 SamplerState gsamPointWrap : register(s0);
 SamplerState gsamAnisotropicWrap : register(s4);
@@ -40,7 +41,10 @@ cbuffer cbPass : register(b0)
     float gDeltaTime;
     float4 gAmbientLight;
 
-    Light gLights[MaxLights];
+    uint gNumDirLights;
+    uint gNumPointLights;
+    uint gNumSpotLights;
+    uint gNumLightsTotal;
 };
 
 struct VertexOut
@@ -97,7 +101,25 @@ float4 PS(VertexOut pin) : SV_Target
     float3 shadowFactor = 1.0f;
 
 
-    float4 directLight = ComputeLighting(gLights, mat, posW, normalW, toEyeW, shadowFactor);
+    float3 directLightColor = 0.0f;
+
+    uint i = 0;
+    for (i = 0; i < gNumDirLights && i < gNumLightsTotal; ++i)
+    {
+        directLightColor += ComputeDirectionalLight(gLights[i], mat, normalW, toEyeW);
+    }
+
+    for (; i < gNumDirLights + gNumPointLights && i < gNumLightsTotal; ++i)
+    {
+        directLightColor += ComputePointLight(gLights[i], mat, posW, normalW, toEyeW);
+    }
+
+    for (; i < gNumLightsTotal; ++i)
+    {
+        directLightColor += ComputeSpotLight(gLights[i], mat, posW, normalW, toEyeW);
+    }
+
+    float4 directLight = float4(directLightColor, 0.0f)
 
     float4 litColor = (gAmbientLight * diffuseAlbedo) + directLight;
     float3 debugColor = float3(0, 0, 0);
