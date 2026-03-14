@@ -610,7 +610,7 @@ void Meow::AddSpotDeferredLight(const XMFLOAT3& position, const XMFLOAT3& direct
 
 void Meow::BuildDeferredLights()
 {
-    constexpr UINT kPointLights = 1200;
+    constexpr UINT kPointLights = 100;
 
     mDeferredLights.clear();
     mNumDirLights = 0;
@@ -625,15 +625,15 @@ void Meow::BuildDeferredLights()
 
     for (UINT i = 0; i < kPointLights; ++i)
     {
-        const float x = -180.0f + (i % 60) * 6.0f;
-        const float z = -180.0f + (i / 60) * 12.0f;
-        AddPointDeferredLight(XMFLOAT3(x, 8.0f, z), XMFLOAT3(0.10f, 0.08f, 0.06f), 2.0f, 24.0f);
+        const float x =  (i % 60) * 16.0f;
+        const float z =  (i / 60) * 12.0f;
+        AddPointDeferredLight(XMFLOAT3(x, 8.0f, z), XMFLOAT3(0.01f, 0.08f, 0.06f), 20.0f, 100.0f);
     }
 
     XMVECTOR spotDir = XMVector3Normalize(XMVectorSet(0.7f, -1.0f, -0.7f, 0.0f));
     XMFLOAT3 spotDirNorm;
     XMStoreFloat3(&spotDirNorm, spotDir);
-    AddSpotDeferredLight(XMFLOAT3(140.0f, 14.0f, 12.0f), spotDirNorm, XMFLOAT3(0.3f, 0.5f, 1.0f), 5.0f, 100.0f,  24.0f);
+    AddSpotDeferredLight(XMFLOAT3(0.0f, 100.0f, 10.0f), spotDirNorm, XMFLOAT3(10.8f, 10.5f, 111.0f), 500.0f, 10000.0f,  200.0f);
 
     mLightSB = std::make_unique<UploadBuffer<Light>>(md3dDevice.Get(), static_cast<UINT>(mDeferredLights.size()), false);
     for (UINT i = 0; i < mDeferredLights.size(); ++i)

@@ -131,7 +131,7 @@ float4 PS(VertexOut pin) : SV_Target
     float d2 = length(posW - gLights[2].Position);
     if (d2 < 50.0f)
         return float4(0.0f, 0.5f, 1.0f, 1.0f); // голубой*/
-   litColor.a = diffuseAlbedo.a;
+    litColor.a = diffuseAlbedo.a;
 
    return litColor;
 }
