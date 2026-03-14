@@ -70,10 +70,10 @@ float4 PS(VertexOut pin) : SV_Target
     float3 normalW = gNormalMap.Sample(gsamPointWrap, pin.TexC).xyz;
     float depth = gDepthMap.Sample(gsamPointWrap, pin.TexC).r;
 
-    //if (depth >= 1.0f)
-    //{
-    //    discard; 
-    //}
+    if (depth >= 1.0f)
+    {
+        discard; 
+    }
 
 
     float2 ndcXY = float2(pin.TexC.x * 2.0f - 1.0f, (1.0f - pin.TexC.y) * 2.0f - 1.0f);

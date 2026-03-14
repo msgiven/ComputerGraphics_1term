@@ -73,6 +73,7 @@ private:
     void SpawnBullet();
     void UpdateBullets(float dt);
     void UpdateBulletLights();
+    void BuildGlowPSO();
 
     GBuffer* mgBuffer;
 
@@ -133,6 +134,10 @@ private:
     ComPtr<ID3DBlob> mvsWaveByteCode = nullptr;
     ComPtr<ID3DBlob> mpsWaveByteCode = nullptr;
     ComPtr<ID3D12PipelineState> mWavePSO = nullptr;
+
+    ComPtr<ID3DBlob> mvsGlowByteCode = nullptr;
+    ComPtr<ID3DBlob> mpsGlowByteCode = nullptr;
+    ComPtr<ID3D12PipelineState> mGlowPSO = nullptr;
 
     std::vector<std::unique_ptr<RenderItem>> mAllRitems;
     std::vector<RenderItem*> mOpaqueRitems;
@@ -197,6 +202,7 @@ bool Meow::Initialize()
     BuildShadersAndInputLayout();
     BuildPSO();
     BuildScreenQuadPSO();
+    BuildGlowPSO();
 
     mgBuffer = new GBuffer(md3dDevice.Get(), mClientWidth, mClientHeight);
     BuildDeferredLights();
@@ -424,6 +430,38 @@ void Meow::Draw(const GameTimer& gt)
     mCommandList->DrawInstanced(3, 1, 0, 0);
 
 
+    ID3D12DescriptorHeap* modelHeaps[] = { mSrvDescriptorHeap.Get() };
+    mCommandList->SetDescriptorHeaps(_countof(modelHeaps), modelHeaps);
+    mCommandList->SetPipelineState(mGlowPSO.Get());
+    mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
+    mCommandList->OMSetRenderTargets(1, &backBufferRtv, false, &dsv);
+    mCommandList->SetGraphicsRootConstantBufferView(2, mPassCB->Resource()->GetGPUVirtualAddress());
+
+    for (const BulletState& bullet : mBullets)
+    {
+        if (!bullet.IsActive || bullet.RenderProxy == nullptr)
+        {
+            continue;
+        }
+
+        RenderItem* ri = bullet.RenderProxy;
+        auto vbv = ri->Geo->VertexBufferView();
+        auto ibv = ri->Geo->IndexBufferView();
+        mCommandList->IASetVertexBuffers(0, 1, &vbv);
+        mCommandList->IASetIndexBuffer(&ibv);
+        mCommandList->IASetPrimitiveTopology(ri->PrimitiveType);
+
+        CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+        int texIdx = (ri->Mat->DiffuseSrvHeapIndex >= 0) ? ri->Mat->DiffuseSrvHeapIndex : 0;
+        texHandle.Offset(texIdx, srvSize);
+
+        mCommandList->SetGraphicsRootDescriptorTable(0, texHandle);
+        mCommandList->SetGraphicsRootConstantBufferView(1, mObjectCB->Resource()->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBByteSize);
+        mCommandList->SetGraphicsRootConstantBufferView(3, mMaterialCB->Resource()->GetGPUVirtualAddress() + ri->Mat->matCBIndex * matCBByteSize);
+
+        mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
+    }
+
     auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     mCommandList->ResourceBarrier(1, &barrier2);
 
@@ -649,7 +687,7 @@ void Meow::AddSpotDeferredLight(const XMFLOAT3& position, const XMFLOAT3& direct
 
 void Meow::BuildDeferredLights()
 {
-    UINT kPointLights = 100;
+    UINT kPointLights = 1000;
     mStaticLights.clear();
     mDeferredLights.clear();
     mNumDirLights = 0;
@@ -739,6 +777,7 @@ void Meow::BuildShadersAndInputLayout()
     std::wstring shaderPath = L"color.hlsl";
     std::wstring shaderDisplayPath = L"Display.hlsl";
     std::wstring waveShaderPath = L"wave.hlsl";
+    std::wstring glowShaderPath = L"glow.hlsl";
 
     try {
  
@@ -750,6 +789,9 @@ void Meow::BuildShadersAndInputLayout()
        
         mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
         mpsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "PS", "ps_5_0");
+
+        mvsGlowByteCode = d3dUtil::CompileShader(glowShaderPath, nullptr, "VS", "vs_5_0");
+        mpsGlowByteCode = d3dUtil::CompileShader(glowShaderPath, nullptr, "PS", "ps_5_0");
     }
     /*catch (std::exception& e) {
         MessageBoxA(nullptr, e.what(), "Shader Compilation Error", MB_OK);
@@ -985,7 +1027,6 @@ void Meow::InitBulletPool()
         XMStoreFloat4x4(&bulletRI->World, XMMatrixTranslation(0.0f, -10000.0f, 0.0f));
 
         mBullets[i].RenderProxy = bulletRI.get();
-        mOpaqueRitems.push_back(bulletRI.get());
         mBulletRitems.push_back(bulletRI.get());
         mAllRitems.push_back(std::move(bulletRI));
     }
@@ -1043,38 +1084,45 @@ void Meow::UpdateBullets(float dt)
 void Meow::UpdateBulletLights()
 {
     mDeferredLights.clear();
-    mNumDirLights = mStaticDirLights;
-    mNumPointLights = mStaticPointLights;
-    mNumSpotLights = mStaticSpotLights;
 
-    for (UINT i = 0; i < mStaticDirLights; ++i) {
+    for (UINT i = 0; i < mStaticDirLights; ++i)
+    {
         mDeferredLights.push_back(mStaticLights[i]);
     }
 
-    for (UINT i = mStaticDirLights; i < mStaticDirLights + mStaticPointLights; ++i) {
-        mDeferredLights.push_back(mStaticLights[i]);
+    UINT pointStart = mStaticDirLights;
+    for (UINT i = 0; i < mStaticPointLights; ++i)
+    {
+        mDeferredLights.push_back(mStaticLights[pointStart + i]);
     }
 
+    UINT bulletLightCount = 0;
     for (const BulletState& bullet : mBullets)
     {
-        if (!bullet.IsActive) continue;
+        if (bullet.IsActive)
+        {
+            Light bulletLight;
+            bulletLight.Position = bullet.Position;
+            bulletLight.Strength = XMFLOAT3(100.0f, 100.5f, 100.0f);
+            bulletLight.FalloffStart = 0.9f;
+            bulletLight.FalloffEnd = 2.5f; 
+            bulletLight.Direction = XMFLOAT3(1.0f, -1.0f, 1.0f);
+            bulletLight.SpotPower = 10.0f;
 
-        Light bulletLight;
-        bulletLight.Position = bullet.Position;
-        bulletLight.Position.y += 2.0f;
-        bulletLight.Strength = XMFLOAT3(40.9f, 10.4f, 10.35f);
-        bulletLight.FalloffStart = 0.0f;
-
-        bulletLight.FalloffEnd = 5.0f;
-
-        mDeferredLights.push_back(bulletLight);
-        ++mNumPointLights;
+            mDeferredLights.push_back(bulletLight);
+            bulletLightCount++;
+        }
     }
 
     UINT spotStart = mStaticDirLights + mStaticPointLights;
-    for (UINT i = spotStart; i < spotStart + mStaticSpotLights; ++i) {
-        mDeferredLights.push_back(mStaticLights[i]);
+    for (UINT i = 0; i < mStaticSpotLights; ++i)
+    {
+        mDeferredLights.push_back(mStaticLights[spotStart + i]);
     }
+
+    mNumDirLights = mStaticDirLights;
+    mNumPointLights = mStaticPointLights + bulletLightCount;
+    mNumSpotLights = mStaticSpotLights;
 
     if (mLightSB)
     {
@@ -1084,7 +1132,6 @@ void Meow::UpdateBulletLights()
         }
     }
 }
-
 void Meow::BuildPSO() {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.pRootSignature = mRootSignature.Get();
@@ -1142,6 +1189,40 @@ void Meow::BuildScreenQuadPSO()
     psoDesc.SampleDesc.Count = 1;
 
     md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mLightPSO));
+}
+
+void Meow::BuildGlowPSO()
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+    psoDesc.pRootSignature = mRootSignature.Get();
+    psoDesc.VS = { reinterpret_cast<BYTE*>(mvsGlowByteCode->GetBufferPointer()), mvsGlowByteCode->GetBufferSize() };
+    psoDesc.PS = { reinterpret_cast<BYTE*>(mpsGlowByteCode->GetBufferPointer()), mpsGlowByteCode->GetBufferSize() };
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    psoDesc.BlendState.RenderTarget[0].BlendEnable = TRUE;
+    psoDesc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
+    psoDesc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_ONE;
+    psoDesc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+    psoDesc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+    psoDesc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ONE;
+    psoDesc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    psoDesc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    psoDesc.DepthStencilState.DepthEnable = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+    psoDesc.InputLayout = { mInputLayoutDesc.data(), (UINT)mInputLayoutDesc.size() };
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = mBackBufferFormat;
+    psoDesc.DSVFormat = mDepthStencilFormat;
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
+    psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
+
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mGlowPSO)));
 }
 std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> Meow::GetStaticSamplers()
 {
