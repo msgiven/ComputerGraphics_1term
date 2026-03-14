@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 
+#include <cstdint>
 #include <assimp/postprocess.h>
 #include <DirectXColors.h>
 
@@ -68,6 +69,10 @@ private:
     void AddDirectionalDeferredLight(const XMFLOAT3& direction, const XMFLOAT3& strength);
     void AddPointDeferredLight(const XMFLOAT3& position, const XMFLOAT3& strength, float falloffStart, float falloffEnd);
     void AddSpotDeferredLight(const XMFLOAT3& position, const XMFLOAT3& direction, const XMFLOAT3& strength, float falloffStart, float falloffEnd, float spotPower);
+    void InitBulletPool();
+    void SpawnBullet();
+    void UpdateBullets(float dt);
+    void UpdateBulletLights();
 
     GBuffer* mgBuffer;
 
@@ -141,6 +146,30 @@ private:
     UINT mNumPointLights = 0;
     UINT mNumSpotLights = 0;
 
+    std::vector<RenderItem*> mBulletRitems;
+    std::unique_ptr<MeshGeometry> mBulletGeo = nullptr;
+
+    struct BulletState
+    {
+        bool IsActive = false;
+        float LifeLeft = 0.0f;
+        XMFLOAT3 Position = { 0.0f, 0.0f, 0.0f };
+        XMFLOAT3 Velocity = { 0.0f, 0.0f, 0.0f };
+        RenderItem* RenderProxy = nullptr;
+    };
+
+    static constexpr UINT kMaxBullets = 1500;
+    static constexpr float kBulletSpeed = 180.0f;
+    static constexpr float kBulletLifeTime = 8.0f;
+    static constexpr float kBulletRadius = 0.35f;
+    std::array<BulletState, kMaxBullets> mBullets;
+    UINT mNextBulletSlot = 0;
+    bool mWasSpaceDown = false;
+
+    std::vector<Light> mStaticLights;
+    UINT mStaticDirLights = 0;
+    UINT mStaticPointLights = 0;
+    UINT mStaticSpotLights = 0;
 };
 
 Meow::Meow(HINSTANCE hInstance)
@@ -246,12 +275,22 @@ void Meow::Update(const GameTimer& gt)
     if (GetAsyncKeyState('D') & 0x8000)
         pos = XMVectorMultiplyAdd(XMVectorReplicate(speed), right, pos);
 
+    const bool isSpaceDown = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
+    if (isSpaceDown && !mWasSpaceDown)
+    {
+        SpawnBullet();
+    }
+    mWasSpaceDown = isSpaceDown;
+
     XMStoreFloat3(&mEyePos, pos);
 
 
     XMVECTOR target = XMVectorAdd(pos, forward);
     XMMATRIX view = XMMatrixLookAtLH(pos, target, up);
     XMStoreFloat4x4(&mView, view);
+
+    UpdateBullets(dt);
+    UpdateBulletLights();
 
   
     UpdateObjectCBs(gt);
@@ -610,13 +649,14 @@ void Meow::AddSpotDeferredLight(const XMFLOAT3& position, const XMFLOAT3& direct
 
 void Meow::BuildDeferredLights()
 {
-    constexpr UINT kPointLights = 100;
-
+    UINT kPointLights = 100;
+    mStaticLights.clear();
     mDeferredLights.clear();
     mNumDirLights = 0;
     mNumPointLights = 0;
     mNumSpotLights = 0;
-    mDeferredLights.reserve(kPointLights + 2);
+    mStaticLights.reserve(kPointLights + 2);
+    mDeferredLights.reserve(kPointLights + 2 + kMaxBullets);
 
     XMVECTOR lightDir = -MathHelper::SphericalToCartesian(1.0f, mSunTheta, mSunPhi);
     XMFLOAT3 dirNorm;
@@ -635,13 +675,18 @@ void Meow::BuildDeferredLights()
     XMStoreFloat3(&spotDirNorm, spotDir);
     AddSpotDeferredLight(XMFLOAT3(0.0f, 100.0f, 10.0f), spotDirNorm, XMFLOAT3(10.8f, 10.5f, 111.0f), 500.0f, 10000.0f,  200.0f);
 
-    mLightSB = std::make_unique<UploadBuffer<Light>>(md3dDevice.Get(), static_cast<UINT>(mDeferredLights.size()), false);
-    for (UINT i = 0; i < mDeferredLights.size(); ++i)
+    mStaticLights = mDeferredLights;
+    mStaticDirLights = mNumDirLights;
+    mStaticPointLights = mNumPointLights;
+    mStaticSpotLights = mNumSpotLights;
+
+    mLightSB = std::make_unique<UploadBuffer<Light>>(md3dDevice.Get(), static_cast<UINT>(mStaticLights.size()) + kMaxBullets, false);
+    for (UINT i = 0; i < mStaticLights.size(); ++i)
     {
-        mLightSB->CopyData(i, mDeferredLights[i]);
+        mLightSB->CopyData(i, mStaticLights[i]);
     }
 
-    mgBuffer->UpdateLightSrv(md3dDevice.Get(), mLightSB->Resource(), static_cast<UINT>(mDeferredLights.size()), sizeof(Light));
+    mgBuffer->UpdateLightSrv(md3dDevice.Get(), mLightSB->Resource(), static_cast<UINT>(mStaticLights.size()) + kMaxBullets, sizeof(Light));
 }
 
 void Meow::UpdatePassCB(const GameTimer& gt)
@@ -857,6 +902,172 @@ void Meow::LoadModelAndTextures()
         }
         else {
             mOpaqueRitems.push_back(e.get());
+        }
+    }
+    auto bulletMat = std::make_unique<Material>();
+    bulletMat->name = "BulletGlow";
+    bulletMat->matCBIndex = static_cast<UINT>(mMaterials.size());
+    bulletMat->DiffuseSrvHeapIndex = 0;
+    bulletMat->diffuseAlbedo = { 2.4f, 1.7f, 0.6f, 1.0f };
+    bulletMat->fresnelRO = { 0.9f, 0.8f, 0.2f };
+    bulletMat->roughness = 0.02f;
+    mMaterials[bulletMat->name] = std::move(bulletMat);
+
+    std::vector<Vertex> sphereVertices;
+    std::vector<std::uint32_t> sphereIndices;
+    UINT kStackCount = 10;
+    UINT kSliceCount = 10;
+    for (UINT stack = 0; stack <= kStackCount; ++stack)
+    {
+        const float phi = XM_PI * static_cast<float>(stack) / static_cast<float>(kStackCount);
+        for (UINT slice = 0; slice <= kSliceCount; ++slice)
+        {
+            const float theta = XM_2PI * static_cast<float>(slice) / static_cast<float>(kSliceCount);
+            Vertex v;
+            v.Pos = {
+                std::sinf(phi) * std::cosf(theta),
+                std::cosf(phi),
+                std::sinf(phi) * std::sinf(theta)
+            };
+            v.Normal = v.Pos;
+            v.TexC = { static_cast<float>(slice) / kSliceCount, static_cast<float>(stack) / kStackCount };
+            sphereVertices.push_back(v);
+        }
+    }
+
+    for (UINT stack = 0; stack < kStackCount; ++stack)
+    {
+        for (UINT slice = 0; slice < kSliceCount; ++slice)
+        {
+            UINT i0 = stack * (kSliceCount + 1) + slice;
+            UINT i1 = i0 + 1;
+            UINT i2 = (stack + 1) * (kSliceCount + 1) + slice;
+            UINT i3 = i2 + 1;
+
+            sphereIndices.push_back(i0);
+            sphereIndices.push_back(i2);
+            sphereIndices.push_back(i1);
+
+            sphereIndices.push_back(i1);
+            sphereIndices.push_back(i2);
+            sphereIndices.push_back(i3);
+        }
+    }
+
+    mBulletGeo = std::make_unique<MeshGeometry>();
+    mBulletGeo->Name = "BulletSphere";
+
+    const UINT sphereVBByteSize = static_cast<UINT>(sphereVertices.size() * sizeof(Vertex));
+    const UINT sphereIBByteSize = static_cast<UINT>(sphereIndices.size() * sizeof(std::uint32_t));
+    mBulletGeo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(), mCommandList.Get(), sphereVertices.data(), sphereVBByteSize, mBulletGeo->VertexBufferUploader);
+    mBulletGeo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(), mCommandList.Get(), sphereIndices.data(), sphereIBByteSize, mBulletGeo->IndexBufferUploader);
+    mBulletGeo->VertexByteStride = sizeof(Vertex);
+    mBulletGeo->VertexBufferByteSize = sphereVBByteSize;
+    mBulletGeo->IndexFormat = DXGI_FORMAT_R32_UINT;
+    mBulletGeo->IndexBufferByteSize = sphereIBByteSize;
+
+    InitBulletPool();
+}
+
+void Meow::InitBulletPool()
+{
+    const auto submeshIndexCount = static_cast<UINT>(10 * 10 * 6);
+    const UINT objStartIndex = static_cast<UINT>(mAllRitems.size());
+    for (UINT i = 0; i < kMaxBullets; ++i)
+    {
+        auto bulletRI = std::make_unique<RenderItem>();
+        bulletRI->ObjCBIndex = objStartIndex + i;
+        bulletRI->Geo = mBulletGeo.get();
+        bulletRI->Mat = mMaterials["BulletGlow"].get();
+        bulletRI->IndexCount = submeshIndexCount;
+        bulletRI->StartIndexLocation = 0;
+        bulletRI->BaseVertexLocation = 0;
+        XMStoreFloat4x4(&bulletRI->World, XMMatrixTranslation(0.0f, -10000.0f, 0.0f));
+
+        mBullets[i].RenderProxy = bulletRI.get();
+        mOpaqueRitems.push_back(bulletRI.get());
+        mBulletRitems.push_back(bulletRI.get());
+        mAllRitems.push_back(std::move(bulletRI));
+    }
+}
+
+void Meow::SpawnBullet()
+{
+    BulletState& bullet = mBullets[mNextBulletSlot];
+    bullet.IsActive = true;
+    bullet.LifeLeft = kBulletLifeTime;
+
+    XMVECTOR eye = XMLoadFloat3(&mEyePos);
+    XMVECTOR dir = XMVector3Normalize(XMLoadFloat3(&mForward));
+    XMVECTOR spawnPos = XMVectorMultiplyAdd(XMVectorReplicate(2.5f), dir, eye);
+    XMVECTOR velocity = XMVectorScale(dir, kBulletSpeed);
+
+    XMStoreFloat3(&bullet.Position, spawnPos);
+    XMStoreFloat3(&bullet.Velocity, velocity);
+
+    ++mNextBulletSlot;
+    if (mNextBulletSlot >= kMaxBullets)
+    {
+        mNextBulletSlot = 0;
+    }
+}
+
+void Meow::UpdateBullets(float dt)
+{
+    for (BulletState& bullet : mBullets)
+    {
+        if (!bullet.IsActive)
+        {
+            continue;
+        }
+
+        bullet.LifeLeft -= dt;
+        if (bullet.LifeLeft <= 0.0f)
+        {
+            bullet.IsActive = false;
+            XMStoreFloat4x4(&bullet.RenderProxy->World, XMMatrixTranslation(0.0f, -10000.0f, 0.0f));
+            continue;
+        }
+
+        XMVECTOR pos = XMLoadFloat3(&bullet.Position);
+        XMVECTOR vel = XMLoadFloat3(&bullet.Velocity);
+        pos = XMVectorMultiplyAdd(XMVectorReplicate(dt), vel, pos);
+        XMStoreFloat3(&bullet.Position, pos);
+
+        XMMATRIX world = XMMatrixScaling(kBulletRadius, kBulletRadius, kBulletRadius) *
+            XMMatrixTranslation(bullet.Position.x, bullet.Position.y, bullet.Position.z);
+        XMStoreFloat4x4(&bullet.RenderProxy->World, world);
+    }
+}
+
+void Meow::UpdateBulletLights()
+{
+    mDeferredLights = mStaticLights;
+    mNumDirLights = mStaticDirLights;
+    mNumPointLights = mStaticPointLights;
+    mNumSpotLights = mStaticSpotLights;
+
+    for (const BulletState& bullet : mBullets)
+    {
+        if (!bullet.IsActive)
+        {
+            continue;
+        }
+
+        Light bulletLight;
+        bulletLight.Position = bullet.Position;
+        bulletLight.Strength = XMFLOAT3(0.09f, 0.04f, 0.035f);
+        bulletLight.FalloffStart = 0.1f;
+        bulletLight.FalloffEnd = 2.0f;
+        mDeferredLights.push_back(bulletLight);
+        ++mNumPointLights;
+    }
+
+    if (mLightSB)
+    {
+        for (UINT i = 0; i < mDeferredLights.size(); ++i)
+        {
+            mLightSB->CopyData(i, mDeferredLights[i]);
         }
     }
 }

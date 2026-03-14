@@ -77,16 +77,11 @@ float4 PS(VertexOut pin) : SV_Target
 
 
     float2 ndcXY = float2(pin.TexC.x * 2.0f - 1.0f, (1.0f - pin.TexC.y) * 2.0f - 1.0f);
+    float4 clipSpacePos = float4(ndcXY, depth, 1.0f);
 
-    float4 clipSpacePos = float4(pin.TexC.x * 2.0f - 1.0f, (1.0f - pin.TexC.y) * 2.0f - 1.0f, depth, 1.0f);
- 
-    float4 viewPos = mul(clipSpacePos, gInvProj);
-    viewPos /= max(viewPos.w, 1e-6f);
 
-    float linearDepth = gNearZ * gFarZ / max(gFarZ - depth * (gFarZ - gNearZ), 1e-6f);
-    viewPos.xyz *= linearDepth / max(viewPos.z, 1e-6f);
-
-    float3 posW = mul(float4(viewPos.xyz, 1.0f), gInvView).xyz;
+    float4 worldPos = mul(clipSpacePos, gInvViewProj);
+    float3 posW = worldPos.xyz / worldPos.w;
 
 
     normalW = normalize(normalW);
