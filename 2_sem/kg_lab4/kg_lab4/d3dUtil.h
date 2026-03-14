@@ -114,12 +114,9 @@ struct GBuffer {
 	ComPtr<ID3D12Resource> DiffuseTex = nullptr;
 	ComPtr<ID3D12Resource> NormalTex = nullptr;
 	ComPtr<ID3D12Resource> Pos = nullptr;
-
-	// Вместо Diligent используем стандартные кучи
 	ComPtr<ID3D12DescriptorHeap> mSrvDescriptorHeap = nullptr;
 	ComPtr<ID3D12DescriptorHeap> mRtvDescriptorHeap = nullptr;
 
-	// Храним базовый GPU-хендл для передачи в шейдер (SetGraphicsRootDescriptorTable)
 	D3D12_GPU_DESCRIPTOR_HANDLE mSrvBaseGpuHandle;
 
 	D3D12_CPU_DESCRIPTOR_HANDLE DiffRTV;
@@ -163,7 +160,6 @@ struct GBuffer {
 		optCV.Format = DXGI_FORMAT_R32_FLOAT;
 		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&Pos));
 
-		// 4. Создание SRV (Shader Resource Views)
 		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -180,7 +176,6 @@ struct GBuffer {
 		srvHandle.Offset(1, srvSize);
 		device->CreateShaderResourceView(Pos.Get(), &srvDesc, srvHandle);
 
-		// 5. Создание RTV (Render Target Views)
 		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 		UINT rtvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 
@@ -246,7 +241,6 @@ struct GBuffer {
 		optCV.Format = DXGI_FORMAT_R32_FLOAT;
 		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&Pos));
 
-		// 4. Создание SRV (Shader Resource Views)
 		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -263,7 +257,6 @@ struct GBuffer {
 		srvHandle.Offset(1, srvSize);
 		device->CreateShaderResourceView(Pos.Get(), &srvDesc, srvHandle);
 
-		// 5. Создание RTV (Render Target Views)
 		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 		UINT rtvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
 

@@ -1042,25 +1042,38 @@ void Meow::UpdateBullets(float dt)
 
 void Meow::UpdateBulletLights()
 {
-    mDeferredLights = mStaticLights;
+    mDeferredLights.clear();
     mNumDirLights = mStaticDirLights;
     mNumPointLights = mStaticPointLights;
     mNumSpotLights = mStaticSpotLights;
 
+    for (UINT i = 0; i < mStaticDirLights; ++i) {
+        mDeferredLights.push_back(mStaticLights[i]);
+    }
+
+    for (UINT i = mStaticDirLights; i < mStaticDirLights + mStaticPointLights; ++i) {
+        mDeferredLights.push_back(mStaticLights[i]);
+    }
+
     for (const BulletState& bullet : mBullets)
     {
-        if (!bullet.IsActive)
-        {
-            continue;
-        }
+        if (!bullet.IsActive) continue;
 
         Light bulletLight;
         bulletLight.Position = bullet.Position;
-        bulletLight.Strength = XMFLOAT3(0.09f, 0.04f, 0.035f);
-        bulletLight.FalloffStart = 0.1f;
-        bulletLight.FalloffEnd = 2.0f;
+        bulletLight.Position.y += 2.0f;
+        bulletLight.Strength = XMFLOAT3(40.9f, 10.4f, 10.35f);
+        bulletLight.FalloffStart = 0.0f;
+
+        bulletLight.FalloffEnd = 5.0f;
+
         mDeferredLights.push_back(bulletLight);
         ++mNumPointLights;
+    }
+
+    UINT spotStart = mStaticDirLights + mStaticPointLights;
+    for (UINT i = spotStart; i < spotStart + mStaticSpotLights; ++i) {
+        mDeferredLights.push_back(mStaticLights[i]);
     }
 
     if (mLightSB)
@@ -1071,7 +1084,6 @@ void Meow::UpdateBulletLights()
         }
     }
 }
-
 
 void Meow::BuildPSO() {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};

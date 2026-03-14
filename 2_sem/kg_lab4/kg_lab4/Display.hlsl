@@ -95,7 +95,6 @@ float4 PS(VertexOut pin) : SV_Target
     
     float3 shadowFactor = 1.0f;
 
-
     float3 directLightColor = 0.0f;
 
     uint i = 0;
