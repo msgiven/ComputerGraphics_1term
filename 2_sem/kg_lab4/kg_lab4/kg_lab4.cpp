@@ -63,7 +63,7 @@ private:
     void BuildLightRootSignature();
     void BuildShadersAndInputLayout();
     void BuildPSO();
-    void BuildScreenQuadPSO();
+    void BuildDisplayPSO();
     void UpdatePassCB(const GameTimer& gt);
     void BuildDeferredLights();
     void AddDirectionalDeferredLight(const XMFLOAT3& direction, const XMFLOAT3& strength);
@@ -125,6 +125,8 @@ private:
 
     ComPtr<ID3DBlob> mvsByteCode = nullptr;
     ComPtr<ID3DBlob> mpsByteCode = nullptr;
+    ComPtr<ID3D10Blob> mhsByteCode = nullptr;
+    ComPtr<ID3D10Blob> mdsByteCode = nullptr;
     ComPtr<ID3D12PipelineState> mPSO = nullptr;
 
     ComPtr<ID3DBlob> mvsLightByteCode = nullptr;
@@ -201,7 +203,7 @@ bool Meow::Initialize()
     BuildLightRootSignature();
     BuildShadersAndInputLayout();
     BuildPSO();
-    BuildScreenQuadPSO();
+    BuildDisplayPSO();
     BuildGlowPSO();
 
     mgBuffer = new GBuffer(md3dDevice.Get(), mClientWidth, mClientHeight);
@@ -783,6 +785,8 @@ void Meow::BuildShadersAndInputLayout()
  
         mvsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "VS", "vs_5_0");
         mpsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "PS", "ps_5_0");
+        mhsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "HS", "hs_5_0");
+        mhsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "DS", "ds_5_0");
 
         mvsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "VS", "vs_5_0");
         mpsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "PS", "ps_5_0");
@@ -1137,6 +1141,8 @@ void Meow::BuildPSO() {
     psoDesc.pRootSignature = mRootSignature.Get();
     psoDesc.VS = { reinterpret_cast<BYTE*>(mvsByteCode->GetBufferPointer()), mvsByteCode->GetBufferSize() };
     psoDesc.PS = { reinterpret_cast<BYTE*>(mpsByteCode->GetBufferPointer()), mpsByteCode->GetBufferSize() };
+    psoDesc.HS = { reinterpret_cast<BYTE*>(mhsByteCode->GetBufferPointer()), mhsByteCode->GetBufferSize() };
+    psoDesc.DS = { reinterpret_cast<BYTE*>(mdsByteCode->GetBufferPointer()), mdsByteCode->GetBufferSize() };
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
     psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
@@ -1161,7 +1167,7 @@ void Meow::BuildPSO() {
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mWavePSO)));
 }
 
-void Meow::BuildScreenQuadPSO()
+void Meow::BuildDisplayPSO()
 {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
     ZeroMemory(&psoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));

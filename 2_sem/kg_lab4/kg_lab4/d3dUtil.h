@@ -134,7 +134,7 @@ struct GBuffer {
 		D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
 		srvHeapDesc.NumDescriptors = 4;
 		srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-		srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE; // Важно для использования в шейдерах
+		srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 		ThrowIfFailed(device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));
 
 		mSrvBaseGpuHandle = mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
@@ -214,6 +214,7 @@ struct GBuffer {
 		};
 		cmdList->ResourceBarrier(3, barriers);
 	}
+
 	void OnResize(ID3D12Device* device, int width, int height) {
 		DiffuseTex.Reset();
 		NormalTex.Reset();

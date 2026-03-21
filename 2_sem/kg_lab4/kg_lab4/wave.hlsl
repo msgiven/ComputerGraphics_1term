@@ -68,17 +68,35 @@ struct VertexIn
 
 struct VertexOut
 {
+    float3 PosL : POSITION;
     float4 PosH : SV_POSITION;
     float3 PosW : POSITION;
     float3 NormalW : NORMAL;
     float2 TexC : TEXCOORD;
 };
 
+struct PatchTess
+{
+    float OuterTess[4] : SV_TessFactor;
+    float InnerTess[2] : SV_InsideTessFactor;
+};
+
+struct HullOut
+{
+    float3 PosL : POSITIONT;
+};
+
+struct DomainOut
+{
+    float4 PosH : SV_POSITION;
+};
+
+
 VertexOut VS(VertexIn vin)
 {
     VertexOut vout;
     
-   
+    vout.PosL = vin.PosL;
     float3 animatedPos = vin.PosL;
     
 
@@ -99,6 +117,50 @@ VertexOut VS(VertexIn vin)
     vout.TexC = mul(float4(vin.TexC, 0.0f, 1.0f), gMatTransform).xy;
 
     return vout;
+}
+
+
+PatchTess ConstantHS(InputPatch<VertexOut, 4> patch, uint patchID : SV_PrimitiveID)
+{
+    PatchTess pt;
+    
+    pt.OuterTess[0] = 3;
+    pt.OuterTess[1] = 3;
+    pt.OuterTess[2] = 3;
+    pt.OuterTess[3] = 3;
+    
+    pt.InnerTess[0] = 3;
+    pt.InnerTess[1] = 3;
+    
+    return pt;
+}
+
+[domain("quad")]
+[partitioning("integer")]
+[outputtopology("triangle_cw")]
+[outputcontrolpoints(4)]
+[patchconstantfunc("ConstantHS")]
+[maxtessfactor(64.0f)]
+HullOut HS(InputPatch<VertexOut, 4> patch, uint i : SV_OutputControlPointID, uint patchID : SV_PrimitiveID)
+{
+    HullOut h;
+    h.PosL = patch[i].PosL;
+    
+    return h;
+}
+
+[domain("quad")]
+DomainOut DS(PatchTess patchTess, float2 uv : SV_DomainLocation, const OutputPatch<HullOut, 4> quad)
+{
+    DomainOut d;
+    
+    float4 v1 = lerp(quad[0].PosL, quad[1].PosL, uv.x);
+    float4 v2 = lerp(quad[2].PosL, quad[3].PosL, uv.x);
+    float4 p = lerp(v1, v2, uv.y);
+    
+    d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
+    
+    return d;
 }
 
 float4 PS(VertexOut pin) : SV_Target
