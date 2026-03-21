@@ -135,6 +135,8 @@ private:
 
     ComPtr<ID3DBlob> mvsWaveByteCode = nullptr;
     ComPtr<ID3DBlob> mpsWaveByteCode = nullptr;
+    ComPtr<ID3DBlob> mhsWaveByteCode = nullptr;
+    ComPtr<ID3DBlob> mdsWaveByteCode = nullptr;
     ComPtr<ID3D12PipelineState> mWavePSO = nullptr;
 
     ComPtr<ID3DBlob> mvsGlowByteCode = nullptr;
@@ -786,13 +788,15 @@ void Meow::BuildShadersAndInputLayout()
         mvsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "VS", "vs_5_0");
         mpsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "PS", "ps_5_0");
         mhsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "HS", "hs_5_0");
-        mhsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "DS", "ds_5_0");
+        mdsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "DS", "ds_5_0");
 
         mvsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "VS", "vs_5_0");
         mpsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "PS", "ps_5_0");
        
         mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
         mpsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "PS", "ps_5_0");
+        mhsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "HS", "hs_5_0");
+        mdsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "DS", "ds_5_0");
 
         mvsGlowByteCode = d3dUtil::CompileShader(glowShaderPath, nullptr, "VS", "vs_5_0");
         mpsGlowByteCode = d3dUtil::CompileShader(glowShaderPath, nullptr, "PS", "ps_5_0");
@@ -1028,6 +1032,7 @@ void Meow::InitBulletPool()
         bulletRI->IndexCount = submeshIndexCount;
         bulletRI->StartIndexLocation = 0;
         bulletRI->BaseVertexLocation = 0;
+        //ebulletRI->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
         XMStoreFloat4x4(&bulletRI->World, XMMatrixTranslation(0.0f, -10000.0f, 0.0f));
 
         mBullets[i].RenderProxy = bulletRI.get();
@@ -1149,7 +1154,7 @@ void Meow::BuildPSO() {
     psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE; 
     psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
     psoDesc.InputLayout = { mInputLayoutDesc.data(), (UINT)mInputLayoutDesc.size() };
-    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;//D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 3;
     psoDesc.RTVFormats[0] = mBackBufferFormat;     
     psoDesc.RTVFormats[1] = DXGI_FORMAT_R32G32B32A32_FLOAT;  
@@ -1163,6 +1168,8 @@ void Meow::BuildPSO() {
 
     psoDesc.VS = { reinterpret_cast<BYTE*>(mvsWaveByteCode->GetBufferPointer()), mvsWaveByteCode->GetBufferSize() };
     psoDesc.PS = { reinterpret_cast<BYTE*>(mpsWaveByteCode->GetBufferPointer()), mpsWaveByteCode->GetBufferSize() };
+    psoDesc.HS = { reinterpret_cast<BYTE*>(mhsWaveByteCode->GetBufferPointer()), mhsWaveByteCode->GetBufferSize() };
+    psoDesc.DS = { reinterpret_cast<BYTE*>(mdsWaveByteCode->GetBufferPointer()), mdsWaveByteCode->GetBufferSize() };
 
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mWavePSO)));
 }

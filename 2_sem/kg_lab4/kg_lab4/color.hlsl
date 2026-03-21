@@ -95,11 +95,15 @@ struct PatchTess
 struct HullOut
 {
     float3 PosL : POSITIONT;
+    float3 NormalW : NORMAL;
+    float2 TexC : TEXCOORD;
 };
 
 struct DomainOut
 {
     float4 PosH : SV_POSITION;
+    float3 NormalW : NORMAL;
+    float2 TexC : TEXCOORD;
 };
 
 VertexOut VS(VertexIn vin)
@@ -140,7 +144,8 @@ HullOut HS(InputPatch<VertexOut, 4> patch, uint i : SV_OutputControlPointID, uin
 {
     HullOut h;
     h.PosL = patch[i].PosL;
-    
+    h.NormalW = patch[i].NormalW;
+    h.TexC = patch[i].TexC;
     return h;
 }
 
@@ -152,14 +157,21 @@ DomainOut DS(PatchTess patchTess, float2 uv : SV_DomainLocation, const OutputPat
     float3 v1 = lerp(quad[0].PosL, quad[1].PosL, uv.x);
     float3 v2 = lerp(quad[2].PosL, quad[3].PosL, uv.x);
     float3 p = lerp(v1, v2, uv.y);
-    
     d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
+    
+    float3 n1 = lerp(quad[0].NormalW, quad[1].NormalW, uv.x);
+    float3 n2 = lerp(quad[2].NormalW, quad[3].NormalW, uv.x);
+    d.NormalW = lerp(n1, n2, uv.y); 
+
+    float2 t1 = lerp(quad[0].TexC, quad[1].TexC, uv.x);
+    float2 t2 = lerp(quad[2].TexC, quad[3].TexC, uv.x);
+    d.TexC = lerp(t1, t2, uv.y);
     
     return d;
 }
 
 
-GBufferOut PS(VertexOut pin) : SV_Target
+GBufferOut PS(DomainOut pin) : SV_Target
 {
     GBufferOut gbuf;
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamAnisotropicWrap, pin.TexC) * gDiffuseAlbedo;

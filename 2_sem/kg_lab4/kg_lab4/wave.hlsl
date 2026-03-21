@@ -70,7 +70,7 @@ struct VertexOut
 {
     float3 PosL : POSITION;
     float4 PosH : SV_POSITION;
-    float3 PosW : POSITION;
+    //float3 PosW : POSITION;
     float3 NormalW : NORMAL;
     float2 TexC : TEXCOORD;
 };
@@ -84,11 +84,15 @@ struct PatchTess
 struct HullOut
 {
     float3 PosL : POSITIONT;
+    float3 NormalW : NORMAL;
+    float2 TexC : TEXCOORD;
 };
 
 struct DomainOut
 {
     float4 PosH : SV_POSITION;
+    float3 NormalW : NORMAL;
+    float2 TexC : TEXCOORD;
 };
 
 
@@ -111,7 +115,7 @@ VertexOut VS(VertexIn vin)
 
     vout.PosH = mul(float4(animatedPos, 1.0f), gWorldViewProj);
 
-    vout.PosW = mul(float4(animatedPos, 1.0f), gWorldViewProj).xyz;
+    //vout.PosW = mul(float4(animatedPos, 1.0f), gWorldViewProj).xyz;
 
     vout.NormalW = vin.NormalL;
     vout.TexC = mul(float4(vin.TexC, 0.0f, 1.0f), gMatTransform).xy;
@@ -145,7 +149,8 @@ HullOut HS(InputPatch<VertexOut, 4> patch, uint i : SV_OutputControlPointID, uin
 {
     HullOut h;
     h.PosL = patch[i].PosL;
-    
+    h.NormalW = patch[i].NormalW;
+    h.TexC = patch[i].TexC;
     return h;
 }
 
@@ -154,55 +159,26 @@ DomainOut DS(PatchTess patchTess, float2 uv : SV_DomainLocation, const OutputPat
 {
     DomainOut d;
     
-    float4 v1 = lerp(quad[0].PosL, quad[1].PosL, uv.x);
-    float4 v2 = lerp(quad[2].PosL, quad[3].PosL, uv.x);
-    float4 p = lerp(v1, v2, uv.y);
-    
+    float3 v1 = lerp(quad[0].PosL, quad[1].PosL, uv.x);
+    float3 v2 = lerp(quad[2].PosL, quad[3].PosL, uv.x);
+    float3 p = lerp(v1, v2, uv.y);
     d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
+    
+    float3 n1 = lerp(quad[0].NormalW, quad[1].NormalW, uv.x);
+    float3 n2 = lerp(quad[2].NormalW, quad[3].NormalW, uv.x);
+    d.NormalW = lerp(n1, n2, uv.y);
+
+    float2 t1 = lerp(quad[0].TexC, quad[1].TexC, uv.x);
+    float2 t2 = lerp(quad[2].TexC, quad[3].TexC, uv.x);
+    d.TexC = lerp(t1, t2, uv.y);
     
     return d;
 }
 
-float4 PS(VertexOut pin) : SV_Target
+
+float4 PS(DomainOut pin) : SV_Target
 {
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamAnisotropicWrap, pin.TexC) * gDiffuseAlbedo;
     diffuseAlbedo.a = 1.0f;
-    /*pin.NormalW = normalize(pin.NormalW);
-    float3 toEyeW = normalize(gEyePosW - pin.PosW);
-    float4 ambient = gAmbientLight * diffuseAlbedo;
-
-    const float shininess = 1.0f - gRoughness;
-    Material mat = { diffuseAlbedo, gFresnelR0, shininess };
-    float3 shadowFactor = 1.0f;
-    float3 directLightColor = 0.0f;
-    for (i = 0; i < gNumDirLights && i < gNumLightsTotal; ++i)
-    {
-        directLightColor += ComputeDirectionalLight(gLights[i], mat, normalW, toEyeW);
-    }
-
-    for (; i < gNumDirLights + gNumPointLights && i < gNumLightsTotal; ++i)
-    {
-        directLightColor += ComputePointLight(gLights[i], mat, posW, normalW, toEyeW);
-    }
-
-    for (; i < gNumLightsTotal; ++i)
-    {
-        directLightColor += ComputeSpotLight(gLights[i], mat, posW, normalW, toEyeW);
-    }
-
-    float4 directLight = float4(directLightColor, 0.0f);
-
-    float4 litColor = (gAmbientLight * diffuseAlbedo) + directLight;
-    float3 debugColor = float3(0, 0, 0);
-
-    /*float d1 = length(posW - gLights[1].Position);
-    if (d1 < 50.0f)
-        return float4(1.0f, 0.5f, 0.0f, 1.0f); // оранжевый
-
-    float d2 = length(posW - gLights[2].Position);
-    if (d2 < 50.0f)
-        return float4(0.0f, 0.5f, 1.0f, 1.0f); // голубой
-    litColor.a = diffuseAlbedo.a;*/
-
     return diffuseAlbedo;
 }
