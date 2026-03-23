@@ -77,8 +77,9 @@ struct VertexOut
 
 struct PatchTess
 {
-    float OuterTess[4] : SV_TessFactor;
-    float InnerTess[2] : SV_InsideTessFactor;
+    float OuterTess[3] : SV_TessFactor;
+    float InnerTess : SV_InsideTessFactor;
+    //float InnerTess[2] : SV_InsideTessFactor;
 };
 
 struct HullOut
@@ -124,28 +125,29 @@ VertexOut VS(VertexIn vin)
 }
 
 
-PatchTess ConstantHS(InputPatch<VertexOut, 4> patch, uint patchID : SV_PrimitiveID)
+PatchTess ConstantHS(InputPatch<VertexOut, 3> patch, uint patchID : SV_PrimitiveID)
 {
     PatchTess pt;
     
     pt.OuterTess[0] = 3;
     pt.OuterTess[1] = 3;
     pt.OuterTess[2] = 3;
-    pt.OuterTess[3] = 3;
+  //  pt.OuterTess[3] = 3;
     
-    pt.InnerTess[0] = 3;
-    pt.InnerTess[1] = 3;
+    //pt.InnerTess[0] = 3;
+   // pt.InnerTess[1] = 3;
+    
+    pt.InnerTess = 3;
     
     return pt;
 }
-
-[domain("quad")]
+[domain("tri")]
 [partitioning("integer")]
 [outputtopology("triangle_cw")]
-[outputcontrolpoints(4)]
+[outputcontrolpoints(3)]
 [patchconstantfunc("ConstantHS")]
 [maxtessfactor(64.0f)]
-HullOut HS(InputPatch<VertexOut, 4> patch, uint i : SV_OutputControlPointID, uint patchID : SV_PrimitiveID)
+HullOut HS(InputPatch<VertexOut, 3> patch, uint i : SV_OutputControlPointID, uint patchID : SV_PrimitiveID)
 {
     HullOut h;
     h.PosL = patch[i].PosL;
@@ -154,26 +156,36 @@ HullOut HS(InputPatch<VertexOut, 4> patch, uint i : SV_OutputControlPointID, uin
     return h;
 }
 
-[domain("quad")]
-DomainOut DS(PatchTess patchTess, float2 uv : SV_DomainLocation, const OutputPatch<HullOut, 4> quad)
+[domain("tri")]
+DomainOut DS(PatchTess patchTess, float3 uvw : SV_DomainLocation, const OutputPatch<HullOut, 3> quad)
 {
     DomainOut d;
     
-    float3 v1 = lerp(quad[0].PosL, quad[1].PosL, uv.x);
-    float3 v2 = lerp(quad[2].PosL, quad[3].PosL, uv.x);
+   /* float3 v1 = lerp(quad[0].PosL, quad[1].PosL, uv.x);
+    float3 v2 = lerp(quad[1].PosL, quad[2].PosL, uv.x);
     float3 p = lerp(v1, v2, uv.y);
     d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
     
     float3 n1 = lerp(quad[0].NormalW, quad[1].NormalW, uv.x);
-    float3 n2 = lerp(quad[2].NormalW, quad[3].NormalW, uv.x);
-    d.NormalW = lerp(n1, n2, uv.y);
+    float3 n2 = lerp(quad[1].NormalW, quad[2].NormalW, uv.x);
+    d.NormalW = lerp(n1, n2, uv.y); 
 
     float2 t1 = lerp(quad[0].TexC, quad[1].TexC, uv.x);
-    float2 t2 = lerp(quad[2].TexC, quad[3].TexC, uv.x);
-    d.TexC = lerp(t1, t2, uv.y);
+    float2 t2 = lerp(quad[1].TexC, quad[2].TexC, uv.x);
+    d.TexC = lerp(t1, t2, uv.y);*/
+    float3 p = quad[0].PosL * uvw.x + quad[1].PosL * uvw.y + quad[2].PosL * uvw.z;
+
+    float3 n = quad[0].NormalW * uvw.x + quad[1].NormalW * uvw.y + quad[2].NormalW * uvw.z;
+    float2 tex = quad[0].TexC * uvw.x + quad[1].TexC * uvw.y + quad[2].TexC * uvw.z;
+    
+    d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
+    d.NormalW = n;
+    d.TexC = tex;
     
     return d;
 }
+
+
 
 
 float4 PS(DomainOut pin) : SV_Target
