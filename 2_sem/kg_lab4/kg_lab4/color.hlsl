@@ -14,6 +14,7 @@
 #include "D:\C++Projects\kg_lab4\Shaders\light.hlsl"
 
 Texture2D gDiffuseMap : register(t0);
+Texture2D gNormalMap : register(t1);
 SamplerState gsamPointWrap : register(s0);
 SamplerState gsamPointClamp : register(s1);
 SamplerState gsamLinearWrap : register(s2);
@@ -188,8 +189,11 @@ GBufferOut PS(DomainOut pin) : SV_Target
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamAnisotropicWrap, pin.TexC) * gDiffuseAlbedo;
     gbuf.Diffuse = diffuseAlbedo;
 
-    pin.NormalW = normalize(pin.NormalW);
-    gbuf.Normal = float4(pin.NormalW, 0.0f);
+    float3 mappedNormal = gNormalMap.Sample(gsamAnisotropicWrap, pin.TexC).xyz * 2.0f - 1.0f;
+    //float3 geomNormal = normalize(pin.NormalW);
+    float3 finalNormal = normalize(mappedNormal);
+    gbuf.Normal = float4(finalNormal, 0.0f);
+   // gbuf.Normal = float4(pin.NormalW, 0.0f);
     gbuf.Pos = pin.PosH.z;
 
     return gbuf;

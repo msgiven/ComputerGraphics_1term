@@ -56,6 +56,9 @@ struct Material {
 	std::string name;
 	int matCBIndex = -1;
 	int DiffuseSrvHeapIndex = -1;
+	int NormalSrvHeapIndex = -1;
+	std::string DiffuseMapName;
+	std::string NormalMapName;
 	int numFramesDirty = 1;
 	XMFLOAT4 diffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
 	XMFLOAT3 fresnelRO = { 0.1f,0.1f,0.1f };
