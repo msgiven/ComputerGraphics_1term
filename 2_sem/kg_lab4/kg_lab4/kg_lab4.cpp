@@ -897,7 +897,7 @@ void Meow::LoadModelAndTextures()
         mat->DiffuseSrvHeapIndex = srvHeapIndex;
         mat->NormalSrvHeapIndex = srvHeapIndex + 1;
         srvHeapIndex += 2;
-        std::string diffuseTexName;
+        std::string diffuseTexName = defaultDiffuseTexName;
       
         if (aiMat->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
             aiString texPath;
@@ -935,22 +935,37 @@ void Meow::LoadModelAndTextures()
             diffuseTexName = texPath.C_Str();
             size_t lastDot = diffuseTexName.find_last_of(".");
             if (lastDot != std::string::npos) diffuseTexName = diffuseTexName.substr(0, lastDot) + ".dds";
-            if (!loadTextureIfNeeded(diffuseTexName)) {
-                diffuseTexName = defaultDiffuseTexName;
-            }
+        }
+        if (!loadTextureIfNeeded(diffuseTexName)) {
+            diffuseTexName = defaultDiffuseTexName;
+            loadTextureIfNeeded(diffuseTexName);
         }
         std::string normalTexName = defaultNormalTexName;
         aiString normalTexPath;
-        if (aiMat->GetTextureCount(aiTextureType_NORMALS) > 0 && aiMat->GetTexture(aiTextureType_NORMALS, 0, &normalTexPath) == AI_SUCCESS) {
+        if (aiMat->GetTexture(aiTextureType_DISPLACEMENT, 0, &normalTexPath) == AI_SUCCESS) {
             normalTexName = normalTexPath.C_Str();
+            OutputDebugStringA("Найдено в DISPLACEMENT\n");
         }
-        else if (aiMat->GetTextureCount(aiTextureType_HEIGHT) > 0 && aiMat->GetTexture(aiTextureType_HEIGHT, 0, &normalTexPath) == AI_SUCCESS) {
+        else if (aiMat->GetTexture(aiTextureType_HEIGHT, 0, &normalTexPath) == AI_SUCCESS) {
             normalTexName = normalTexPath.C_Str();
+            OutputDebugStringA("Найдено в HEIGHT\n");
+        }
+        else if (aiMat->GetTexture(aiTextureType_NORMALS, 0, &normalTexPath) == AI_SUCCESS) {
+            normalTexName = normalTexPath.C_Str();
+            OutputDebugStringA("Найдено в NORMALS\n");
+        }
+        else {
+            
+            std::string msg = "pizdez на материале: " + name + "\n";
+            OutputDebugStringA(msg.c_str());
         }
         size_t nLastDot = normalTexName.find_last_of(".");
         if (nLastDot != std::string::npos) normalTexName = normalTexName.substr(0, nLastDot) + ".dds";
         if (!loadTextureIfNeeded(normalTexName)) {
-            normalTexName = diffuseTexName;
+            normalTexName = defaultNormalTexName;
+            if (!loadTextureIfNeeded(normalTexName)) {
+                //normalTexName = diffuseTexName;
+            }
         }
 
         mat->DiffuseMapName = diffuseTexName;

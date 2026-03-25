@@ -190,8 +190,8 @@ GBufferOut PS(DomainOut pin) : SV_Target
     gbuf.Diffuse = diffuseAlbedo;
 
     float3 mappedNormal = gNormalMap.Sample(gsamAnisotropicWrap, pin.TexC).xyz * 2.0f - 1.0f;
-    //float3 geomNormal = normalize(pin.NormalW);
-    float3 finalNormal = normalize(mappedNormal);
+    float3 geomNormal = normalize(pin.NormalW);
+    float3 finalNormal = normalize(mappedNormal) + geomNormal;
     gbuf.Normal = float4(finalNormal, 0.0f);
    // gbuf.Normal = float4(pin.NormalW, 0.0f);
     gbuf.Pos = pin.PosH.z;
