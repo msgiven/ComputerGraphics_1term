@@ -833,8 +833,8 @@ void Meow::BuildShadersAndInputLayout()
 void Meow::LoadModelAndTextures()
 {
 
-    std::string baseDirSponza = "Sponza\\";
-    std::string fileNameSponza = baseDirSponza + "sponza.obj";
+    std::string baseDirSponza = "sponza\\";
+    std::string fileNameSponza = "sponza.obj";
 
     std::string baseDirStone = "old_stone\\";
     std::string fileNameStone = baseDirSponza + "Sketchfab.fbx";
@@ -844,7 +844,7 @@ void Meow::LoadModelAndTextures()
         aiProcess_Triangulate |
         aiProcess_GenSmoothNormals |
         aiProcess_FlipUVs |
-        aiProcess_JoinIdenticalVertices);
+        aiProcess_JoinIdenticalVertices | aiProcess_CalcTangentSpace);
 
     if (!scene || !scene->mRootNode) {
         MessageBoxA(nullptr, "Could not load Sponza. Check paths!", "Error", MB_OK);
@@ -882,8 +882,8 @@ void Meow::LoadModelAndTextures()
 
 
 
-    //loadTextureIfNeeded(defaultDiffuseTexName);
-    //loadTextureIfNeeded(defaultNormalTexName);
+    loadTextureIfNeeded(defaultDiffuseTexName);
+    loadTextureIfNeeded(defaultNormalTexName);
 
     for (unsigned int i = 0; i < scene->mNumMaterials; ++i) {
         aiMaterial* aiMat = scene->mMaterials[i];
@@ -940,31 +940,42 @@ void Meow::LoadModelAndTextures()
             diffuseTexName = defaultDiffuseTexName;
             loadTextureIfNeeded(diffuseTexName);
         }
+
         std::string normalTexName = defaultNormalTexName;
         aiString normalTexPath;
-        if (aiMat->GetTexture(aiTextureType_DISPLACEMENT, 0, &normalTexPath) == AI_SUCCESS) {
-            normalTexName = normalTexPath.C_Str();
-            OutputDebugStringA("Найдено в DISPLACEMENT\n");
-        }
-        else if (aiMat->GetTexture(aiTextureType_HEIGHT, 0, &normalTexPath) == AI_SUCCESS) {
+        if (aiMat->GetTexture(aiTextureType_HEIGHT, 0, &normalTexPath) == AI_SUCCESS) {
             normalTexName = normalTexPath.C_Str();
             OutputDebugStringA("Найдено в HEIGHT\n");
         }
+        else if (aiMat->GetTexture(static_cast<aiTextureType>(8), 0, &normalTexPath) == AI_SUCCESS) {
+            normalTexName = normalTexPath.C_Str();
+            std::string msg = "Найдено в ТИПЕ 8 для: " + name + " -> " + normalTexName + "\n";
+            OutputDebugStringA(msg.c_str());
+        }
+        else if (aiMat->GetTexture(aiTextureType_DISPLACEMENT, 0, &normalTexPath) == AI_SUCCESS) {
+            normalTexName = normalTexPath.C_Str();
+            OutputDebugStringA("Найдено\n");
+        }
         else if (aiMat->GetTexture(aiTextureType_NORMALS, 0, &normalTexPath) == AI_SUCCESS) {
             normalTexName = normalTexPath.C_Str();
-            OutputDebugStringA("Найдено в NORMALS\n");
+           // MessageBoxA(nullptr, "Найдено в NORMALS\n", "DEBUG", MB_OK);
+            //OutputDebugStringA("Найдено в NORMALS\n");
+        }
+        else if (aiMat->GetTexture(aiTextureType_UNKNOWN, 0, &normalTexPath) == AI_SUCCESS) {
+            normalTexName = normalTexPath.C_Str();
+            OutputDebugStringA("Найдено в UNKNOWN!\n");
         }
         else {
-            
-            std::string msg = "pizdez на материале: " + name + "\n";
-            OutputDebugStringA(msg.c_str());
+          //  std::string msg = "pizdez на материале: " + name + "\n";
+           // MessageBoxA(nullptr, msg.c_str(), "DEBUG", MB_OK);
+            normalTexName = defaultNormalTexName;
         }
         size_t nLastDot = normalTexName.find_last_of(".");
         if (nLastDot != std::string::npos) normalTexName = normalTexName.substr(0, nLastDot) + ".dds";
         if (!loadTextureIfNeeded(normalTexName)) {
             normalTexName = defaultNormalTexName;
             if (!loadTextureIfNeeded(normalTexName)) {
-                //normalTexName = diffuseTexName;
+                normalTexName = diffuseTexName;
             }
         }
 
@@ -989,6 +1000,12 @@ void Meow::LoadModelAndTextures()
             v.Pos = { mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z };
             v.Normal = { mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z };
             v.TexC = mesh->mTextureCoords[0] ? XMFLOAT2(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y) : XMFLOAT2(0, 0);
+            if (mesh->HasTangentsAndBitangents()) {
+                v.TangentU = { mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z };
+            }
+            else {
+                v.TangentU = { 1.0f, 0.0f, 0.0f };
+            } 
             vertices.push_back(v);
         }
 

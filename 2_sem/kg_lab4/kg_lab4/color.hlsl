@@ -68,6 +68,7 @@ struct VertexIn
 {
     float3 PosL : POSITION;
     float3 NormalL : NORMAL;
+    float3 TangentL : TANGENT;
     float2 TexC : TEXCOORD; 
 };
 
@@ -75,6 +76,7 @@ struct VertexOut
 {
     float3 PosL : POSITION;
     float4 PosH : SV_POSITION;
+    float3 TangentW : TANGENT;
   //  float3 PosW : POSITION;
     float3 NormalW : NORMAL;
     float2 TexC : TEXCOORD; 
@@ -99,6 +101,7 @@ struct HullOut
     float3 PosL : POSITIONT;
     float3 NormalW : NORMAL;
     float2 TexC : TEXCOORD;
+    float3 TangentW : TANGENT;
 };
 
 struct DomainOut
@@ -106,6 +109,7 @@ struct DomainOut
     float4 PosH : SV_POSITION;
     float3 NormalW : NORMAL;
     float2 TexC : TEXCOORD;
+    float3 TangentW : TANGENT;
 };
 
 VertexOut VS(VertexIn vin)
@@ -117,6 +121,7 @@ VertexOut VS(VertexIn vin)
     vout.PosH = mul(float4(vin.PosL, 1.0f), gWorldViewProj);
     vout.NormalW = vin.NormalL;
     vout.TexC = mul(float4(vin.TexC, 0.0f, 1.0f), gMatTransform).xy;
+    vout.TangentW = vin.TangentL;
     return vout;
 }
 
@@ -150,6 +155,7 @@ HullOut HS(InputPatch<VertexOut, 3> patch, uint i : SV_OutputControlPointID, uin
     h.PosL = patch[i].PosL;
     h.NormalW = patch[i].NormalW;
     h.TexC = patch[i].TexC;
+    h.TangentW = patch[i].TangentW;
     return h;
 }
 
@@ -174,7 +180,8 @@ DomainOut DS(PatchTess patchTess, float3 uvw : SV_DomainLocation, const OutputPa
 
     float3 n = quad[0].NormalW * uvw.x + quad[1].NormalW * uvw.y + quad[2].NormalW * uvw.z;
     float2 tex = quad[0].TexC * uvw.x + quad[1].TexC * uvw.y + quad[2].TexC * uvw.z;
-    
+    float3 t = quad[0].TangentW * uvw.x + quad[1].TangentW * uvw.y + quad[2].TangentW * uvw.z;
+    d.TangentW = t;
     d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
     d.NormalW = n;
     d.TexC = tex;
@@ -182,18 +189,24 @@ DomainOut DS(PatchTess patchTess, float3 uvw : SV_DomainLocation, const OutputPa
     return d;
 }
 
-
 GBufferOut PS(DomainOut pin) : SV_Target
 {
     GBufferOut gbuf;
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamAnisotropicWrap, pin.TexC) * gDiffuseAlbedo;
     gbuf.Diffuse = diffuseAlbedo;
 
-    float3 mappedNormal = gNormalMap.Sample(gsamAnisotropicWrap, pin.TexC).xyz * 2.0f - 1.0f;
-    float3 geomNormal = normalize(pin.NormalW);
-    float3 finalNormal = normalize(mappedNormal) + geomNormal;
-    gbuf.Normal = float4(finalNormal, 0.0f);
-   // gbuf.Normal = float4(pin.NormalW, 0.0f);
+    float3 normalMapSample = gNormalMap.Sample(gsamAnisotropicWrap, pin.TexC).xyz;
+    float3 mappedNormal = normalMapSample * 2.0f - 1.0f;
+
+    float3 N = normalize(pin.NormalW);
+    float3 T = normalize(pin.TangentW);
+    T = normalize(T - dot(T, N) * N);
+
+    float3 B = cross(N, T);
+    float3x3 TBN = float3x3(T, B, N);
+    float3 finalNormal = normalize(mul(mappedNormal, TBN));
+
+    gbuf.Normal = float4(finalNormal * 0.5f + 0.5f, 0.0f);
     gbuf.Pos = pin.PosH.z;
 
     return gbuf;
