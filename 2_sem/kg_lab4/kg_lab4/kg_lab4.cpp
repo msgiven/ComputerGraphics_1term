@@ -840,13 +840,14 @@ void Meow::LoadModelAndTextures()
     std::string fileNameStone = baseDirSponza + "Sketchfab.fbx";
 
     Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(fileNameSponza,
+    const aiScene* sponza = importer.ReadFile(fileNameSponza,
         aiProcess_Triangulate |
         aiProcess_GenSmoothNormals |
         aiProcess_FlipUVs |
         aiProcess_JoinIdenticalVertices | aiProcess_CalcTangentSpace);
 
-    if (!scene || !scene->mRootNode) {
+
+    if (!sponza || !sponza->mRootNode) {
         MessageBoxA(nullptr, "Could not load Sponza. Check paths!", "Error", MB_OK);
         return;
     }
@@ -885,8 +886,8 @@ void Meow::LoadModelAndTextures()
     loadTextureIfNeeded(defaultDiffuseTexName);
     loadTextureIfNeeded(defaultNormalTexName);
 
-    for (unsigned int i = 0; i < scene->mNumMaterials; ++i) {
-        aiMaterial* aiMat = scene->mMaterials[i];
+    for (unsigned int i = 0; i < sponza->mNumMaterials; ++i) {
+        aiMaterial* aiMat = sponza->mMaterials[i];
         aiString matName;
         aiMat->Get(AI_MATKEY_NAME, matName);
         std::string name = matName.C_Str();
@@ -987,8 +988,8 @@ void Meow::LoadModelAndTextures()
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
 
-    for (unsigned int m = 0; m < scene->mNumMeshes; ++m) {
-        aiMesh* mesh = scene->mMeshes[m];
+    for (unsigned int m = 0; m < sponza->mNumMeshes; ++m) {
+        aiMesh* mesh = sponza->mMeshes[m];
 
         SubMeshGeometry subMesh;
         subMesh.BaseVertexLocation = (UINT)vertices.size();
@@ -1024,7 +1025,7 @@ void Meow::LoadModelAndTextures()
         ritem->StartIndexLocation = subMesh.StartIndexLocation;
         ritem->BaseVertexLocation = subMesh.BaseVertexLocation;
 
-        aiMaterial* aiMat = scene->mMaterials[mesh->mMaterialIndex];
+        aiMaterial* aiMat = sponza->mMaterials[mesh->mMaterialIndex];
         aiString mName; aiMat->Get(AI_MATKEY_NAME, mName);
         ritem->Mat = mMaterials[mName.C_Str()].get();
 
