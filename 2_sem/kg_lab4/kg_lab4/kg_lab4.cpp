@@ -196,7 +196,7 @@ bool Meow::Initialize()
 {
     if(!D3DApp::Initialize())
 		return false;
-		
+    ThrowIfFailed(mDirectCmdListAlloc->Reset());
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
     LoadModelAndTextures();
@@ -536,7 +536,7 @@ void Meow::BuildRootSignature() {
     auto sampl = GetStaticSamplers();
 
     CD3DX12_DESCRIPTOR_RANGE texTable;
-    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
+    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
 
     slotRootParametr[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
     slotRootParametr[1].InitAsConstantBufferView(0);
@@ -590,7 +590,7 @@ void Meow::BuildLightRootSignature()
 
 void Meow::BuildDescriptorHeaps()
 {
-    UINT numDescriptors = static_cast<UINT>(mMaterials.size()) * 2;
+    UINT numDescriptors = static_cast<UINT>(mMaterials.size()) * 3;
     if (numDescriptors == 0) numDescriptors = 1; 
 
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
@@ -604,7 +604,7 @@ void Meow::BuildDescriptorHeaps()
 
     for (const auto& matEntry : mMaterials) {
         const Material* mat = matEntry.second.get();
-        if (mat->DiffuseSrvHeapIndex < 0 || mat->NormalSrvHeapIndex < 0) {
+        if (mat->DiffuseSrvHeapIndex < 0 || mat->NormalSrvHeapIndex < 0 || mat->HeightSrvHeapIndex < 0) {
             continue;
         }
 
@@ -629,6 +629,7 @@ void Meow::BuildDescriptorHeaps()
 
         createSrvAtIndex(mat->DiffuseMapName, mat->DiffuseSrvHeapIndex);
         createSrvAtIndex(mat->NormalMapName, mat->NormalSrvHeapIndex);
+        createSrvAtIndex(mat->HeightMapName, mat->HeightSrvHeapIndex);
     }
 
 }
@@ -653,6 +654,8 @@ void Meow::BuildMaterials() {
     mat->fresnelRO = { 0.1f, 0.1f, 0.1f };
     mat->roughness = 0.125f;
     mat->DiffuseSrvHeapIndex = 0;
+    mat->NormalSrvHeapIndex = 0;
+    mat->HeightSrvHeapIndex = 0;
     mMaterials["Model"] = std::move(mat);
 
 }
@@ -667,6 +670,7 @@ void Meow::UpdateMaterialCBs(const GameTimer& gt) {
         matConst.DiffuseAlbedo = mat->diffuseAlbedo;
         matConst.FresnelR0 = mat->fresnelRO;
         matConst.Roughness = mat->roughness;
+        matConst.DispScale = mat->dispScale;
         XMStoreFloat4x4(&matConst.MatTransform, XMMatrixTranspose(matTransform));
 
         mMaterialCB->CopyData(mat->matCBIndex, matConst);
@@ -837,7 +841,7 @@ void Meow::LoadModelAndTextures()
     std::string fileNameSponza = "sponza.obj";
 
     std::string baseDirStone = "old_stone\\";
-    std::string fileNameStone = baseDirSponza + "Sketchfab.fbx";
+    std::string fileNameStone = "D:\\GitHub\\ComputerGraphics_1term\\2_sem\\kg_lab4\\kg_lab4\\old_stone\\Sketchfab.fbx";
 
     Assimp::Importer importer;
     const aiScene* sponza = importer.ReadFile(fileNameSponza,
@@ -859,8 +863,9 @@ void Meow::LoadModelAndTextures()
 
     const std::string defaultDiffuseTexName = "background.dds";
     const std::string defaultNormalTexName = "background_ddn.dds";
+    const std::string defaultHeightTexName = defaultDiffuseTexName;
 
-    auto loadTextureIfNeeded = [&](const std::string& texName) -> bool {
+    auto loadTextureIfNeeded = [&](const std::string& baseDir, const std::string& texName) -> bool {
         if (texName.empty()) {
             return false;
         }
@@ -869,7 +874,7 @@ void Meow::LoadModelAndTextures()
         }
 
         auto tex = std::make_unique<Texture>();
-        std::string fullPath = baseDirSponza + texName;
+        std::string fullPath = baseDir + texName;
         std::wstring wfullPath(fullPath.begin(), fullPath.end());
         HRESULT hr = DirectX::CreateDDSTextureFromFile12(md3dDevice.Get(), mCommandList.Get(), wfullPath.c_str(), tex->resource, tex->uploadHeap);
         if (FAILED(hr)) {
@@ -883,8 +888,8 @@ void Meow::LoadModelAndTextures()
 
 
 
-    loadTextureIfNeeded(defaultDiffuseTexName);
-    loadTextureIfNeeded(defaultNormalTexName);
+    loadTextureIfNeeded(baseDirSponza, defaultDiffuseTexName);
+    loadTextureIfNeeded(baseDirSponza, defaultNormalTexName);
 
     for (unsigned int i = 0; i < sponza->mNumMaterials; ++i) {
         aiMaterial* aiMat = sponza->mMaterials[i];
@@ -897,7 +902,8 @@ void Meow::LoadModelAndTextures()
         mat->matCBIndex = i;
         mat->DiffuseSrvHeapIndex = srvHeapIndex;
         mat->NormalSrvHeapIndex = srvHeapIndex + 1;
-        srvHeapIndex += 2;
+        mat->HeightSrvHeapIndex = srvHeapIndex + 2;
+        srvHeapIndex += 3;
         std::string diffuseTexName = defaultDiffuseTexName;
       
         if (aiMat->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
@@ -937,9 +943,9 @@ void Meow::LoadModelAndTextures()
             size_t lastDot = diffuseTexName.find_last_of(".");
             if (lastDot != std::string::npos) diffuseTexName = diffuseTexName.substr(0, lastDot) + ".dds";
         }
-        if (!loadTextureIfNeeded(diffuseTexName)) {
+        if (!loadTextureIfNeeded(baseDirSponza, diffuseTexName)) {
             diffuseTexName = defaultDiffuseTexName;
-            loadTextureIfNeeded(diffuseTexName);
+            loadTextureIfNeeded(baseDirSponza, diffuseTexName);
         }
 
         std::string normalTexName = defaultNormalTexName;
@@ -973,15 +979,17 @@ void Meow::LoadModelAndTextures()
         }
         size_t nLastDot = normalTexName.find_last_of(".");
         if (nLastDot != std::string::npos) normalTexName = normalTexName.substr(0, nLastDot) + ".dds";
-        if (!loadTextureIfNeeded(normalTexName)) {
+        if (!loadTextureIfNeeded(baseDirSponza, normalTexName)) {
             normalTexName = defaultNormalTexName;
-            if (!loadTextureIfNeeded(normalTexName)) {
+            if (!loadTextureIfNeeded(baseDirSponza, normalTexName)) {
                 normalTexName = diffuseTexName;
             }
         }
 
         mat->DiffuseMapName = diffuseTexName;
         mat->NormalMapName = normalTexName;
+        mat->HeightMapName = defaultHeightTexName;
+        mat->dispScale = 0.0f;
         mMaterials[name] = std::move(mat);
     }
 
@@ -1032,6 +1040,144 @@ void Meow::LoadModelAndTextures()
         mAllRitems.push_back(std::move(ritem));
     }
 
+    Assimp::Importer stoneImporter;
+    const aiScene* oldStone = stoneImporter.ReadFile(fileNameStone,
+        aiProcess_Triangulate |
+        aiProcess_GenSmoothNormals |
+        aiProcess_FlipUVs |
+        aiProcess_JoinIdenticalVertices | aiProcess_CalcTangentSpace);
+    aiString list;
+    importer.GetExtensionList(list);
+    OutputDebugStringA(list.C_Str());
+    if (!oldStone || !oldStone->mRootNode) {
+        std::string error = stoneImporter.GetErrorString();
+        MessageBoxA(nullptr, error.c_str(), "Assimp Error", MB_OK);
+        return; 
+    }
+
+    if (oldStone && oldStone->mRootNode) {
+        auto tryLoadTextureVariants = [&](const std::string& texPath, const std::string& fallback) {
+            std::vector<std::string> candidates;
+            if (!texPath.empty()) {
+                candidates.push_back(texPath);
+
+                std::string withDds = texPath + ".dds";
+                if (std::find(candidates.begin(), candidates.end(), withDds) == candidates.end()) {
+                    candidates.push_back(withDds);
+                }
+
+                size_t lastDot = texPath.find_last_of('.');
+                if (lastDot != std::string::npos) {
+                    std::string replaced = texPath.substr(0, lastDot) + ".dds";
+                    if (std::find(candidates.begin(), candidates.end(), replaced) == candidates.end()) {
+                        candidates.push_back(replaced);
+                    }
+                    std::string replacedWithSuffix = replaced + ".dds";
+                    if (std::find(candidates.begin(), candidates.end(), replacedWithSuffix) == candidates.end()) {
+                        candidates.push_back(replacedWithSuffix);
+                    }
+                }
+            }
+
+            for (const auto& c : candidates) {
+                if (loadTextureIfNeeded(baseDirStone, c)) {
+                    return c;
+                }
+            }
+
+            //loadTextureIfNeeded(baseDirSponza, fallback);
+            return fallback;
+        };
+
+        for (unsigned int i = 0; i < oldStone->mNumMaterials; ++i) {
+
+            aiMaterial* aiMat = oldStone->mMaterials[i];
+            aiString matName;
+            aiMat->Get(AI_MATKEY_NAME, matName);
+            std::string name = std::string("old_stone_") + matName.C_Str();
+
+            auto mat = std::make_unique<Material>();
+            mat->name = name;
+            mat->matCBIndex = static_cast<int>(mMaterials.size());
+            mat->DiffuseSrvHeapIndex = srvHeapIndex;
+            mat->NormalSrvHeapIndex = srvHeapIndex + 1;
+            mat->HeightSrvHeapIndex = srvHeapIndex + 2;
+            srvHeapIndex += 3;
+
+            std::string diffusePath;
+            aiString texPath;
+            if (aiMat->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
+                diffusePath = texPath.C_Str();
+            }
+            diffusePath = "textures\\Stone_Pathway_Base_Color";
+            mat->DiffuseMapName = tryLoadTextureVariants(diffusePath, defaultDiffuseTexName);
+            std::string normalPath;
+            if (aiMat->GetTexture(aiTextureType_NORMALS, 0, &texPath) == AI_SUCCESS ||
+                aiMat->GetTexture(static_cast<aiTextureType>(8), 0, &texPath) == AI_SUCCESS ||
+                aiMat->GetTexture(aiTextureType_HEIGHT, 0, &texPath) == AI_SUCCESS) {
+                normalPath = texPath.C_Str();
+            }
+            normalPath = "textures\\Stone_Pathway_Normal";
+            
+            mat->NormalMapName = tryLoadTextureVariants(normalPath, defaultNormalTexName);
+
+            std::string heightPath;
+            if (aiMat->GetTexture(aiTextureType_DISPLACEMENT, 0, &texPath) == AI_SUCCESS ||
+                aiMat->GetTexture(aiTextureType_HEIGHT, 0, &texPath) == AI_SUCCESS) {
+                heightPath = texPath.C_Str();
+            }
+            heightPath = "textures\\Stone_Pathway_Height";
+            mat->HeightMapName = tryLoadTextureVariants(heightPath, defaultHeightTexName);
+            mat->dispScale = heightPath.empty() ? 0.0f : 0.03f;
+
+            mMaterials[name] = std::move(mat);
+        }
+
+        for (unsigned int m = 0; m < oldStone->mNumMeshes; ++m) {
+            aiMesh* mesh = oldStone->mMeshes[m];
+
+            SubMeshGeometry subMesh;
+            subMesh.BaseVertexLocation = (UINT)vertices.size();
+            subMesh.StartIndexLocation = (UINT)indices.size();
+            subMesh.IndexCount = mesh->mNumFaces * 3;
+
+            for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
+                Vertex v;
+                v.Pos = { mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z };
+                v.Normal = mesh->HasNormals() ? XMFLOAT3(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z) : XMFLOAT3(0.0f, 1.0f, 0.0f);
+                v.TexC = mesh->mTextureCoords[0] ? XMFLOAT2(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y) : XMFLOAT2(0, 0);
+                if (mesh->HasTangentsAndBitangents()) {
+                    v.TangentU = { mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z };
+                }
+                else {
+                    v.TangentU = { 1.0f, 0.0f, 0.0f };
+                }
+                vertices.push_back(v);
+            }
+
+            for (unsigned int i = 0; i < mesh->mNumFaces; ++i) {
+                indices.push_back(mesh->mFaces[i].mIndices[0]);
+                indices.push_back(mesh->mFaces[i].mIndices[1]);
+                indices.push_back(mesh->mFaces[i].mIndices[2]);
+            }
+
+            auto ritem = std::make_unique<RenderItem>();
+            XMStoreFloat4x4(&ritem->World, XMMatrixScaling(10.5f, 10.5f, 10.5f) * XMMatrixTranslation(10.0f, 2.0f, 0.0f));
+            ritem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
+            ritem->Geo = mModelSponza.get();
+            ritem->IndexCount = subMesh.IndexCount;
+            ritem->StartIndexLocation = subMesh.StartIndexLocation;
+            ritem->BaseVertexLocation = subMesh.BaseVertexLocation;
+
+            aiMaterial* aiMat = oldStone->mMaterials[mesh->mMaterialIndex];
+            aiString mName; aiMat->Get(AI_MATKEY_NAME, mName);
+            std::string fullName = std::string("old_stone_") + mName.C_Str();
+            ritem->Mat = mMaterials[fullName].get();
+
+            mAllRitems.push_back(std::move(ritem));
+        }
+    }
+
     const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
     const UINT ibByteSize = (UINT)indices.size() * sizeof(std::uint32_t);
 
@@ -1062,12 +1208,15 @@ void Meow::LoadModelAndTextures()
     bulletMat->matCBIndex = static_cast<UINT>(mMaterials.size());
     bulletMat->DiffuseSrvHeapIndex = srvHeapIndex;
     bulletMat->NormalSrvHeapIndex = srvHeapIndex + 1;
+    bulletMat->HeightSrvHeapIndex = srvHeapIndex + 2;
     bulletMat->DiffuseMapName = defaultDiffuseTexName;
     bulletMat->NormalMapName = defaultNormalTexName;
+    bulletMat->HeightMapName = defaultHeightTexName;
     bulletMat->diffuseAlbedo = { 2.4f, 1.7f, 0.6f, 1.0f };
     bulletMat->fresnelRO = { 0.9f, 0.8f, 0.2f };
     bulletMat->roughness = 0.02f;
     mMaterials[bulletMat->name] = std::move(bulletMat);
+    srvHeapIndex += 3;
 
     std::vector<Vertex> sphereVertices;
     std::vector<std::uint32_t> sphereIndices;

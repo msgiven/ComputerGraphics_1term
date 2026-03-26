@@ -57,6 +57,7 @@ cbuffer cbMaterial : register(b2)
     float3 gFresnelR0;
     float gRoughness;
     float4x4 gMatTransform;
+    float gDispScale;
 };
 
 struct VertexIn

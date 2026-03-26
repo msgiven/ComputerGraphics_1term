@@ -57,20 +57,24 @@ struct Material {
 	int matCBIndex = -1;
 	int DiffuseSrvHeapIndex = -1;
 	int NormalSrvHeapIndex = -1;
+	int HeightSrvHeapIndex = -1;
 	std::string DiffuseMapName;
 	std::string NormalMapName;
+	std::string HeightMapName;
 	int numFramesDirty = 1;
 	XMFLOAT4 diffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
 	XMFLOAT3 fresnelRO = { 0.1f,0.1f,0.1f };
 	float roughness = 0.25f;
+	float dispScale = 0.0f;
 	XMFLOAT4X4 matTransform = MathHelper::Identity4x4();
 };
 
 struct MaterialConstants {
 	DirectX::XMFLOAT4 DiffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
-	DirectX::XMFLOAT3 FresnelR0 = { 0.01f, 0.01f, 0.01f	};
+	DirectX::XMFLOAT3 FresnelR0 = { 0.01f, 0.01f, 0.01f };
 	float Roughness = 0.25f;
 	DirectX::XMFLOAT4X4 MatTransform = MathHelper::Identity4x4();
+	float DispScale = 0.0f;
 };
 
 struct ObjectConstants {
