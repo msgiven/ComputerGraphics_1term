@@ -101,30 +101,25 @@ struct DomainOut
 VertexOut VS(VertexIn vin)
 {
     VertexOut vout;
-    
-    vout.PosL = vin.PosL;
     float3 animatedPos = vin.PosL;
     
-
     float frequency = 0.05f;
     float speed = 3.0f;
-    float amplitude = 5.0f; 
+    float amplitude = 5.0f;
     
     float waveOffset = sin(animatedPos.y * frequency + gTotalTime * speed) * amplitude;
-    
     animatedPos.x += waveOffset;
     animatedPos.z += waveOffset * 0.5f;
 
+
+    vout.PosL = animatedPos;
+    
     vout.PosH = mul(float4(animatedPos, 1.0f), gWorldViewProj);
-
-    //vout.PosW = mul(float4(animatedPos, 1.0f), gWorldViewProj).xyz;
-
     vout.NormalW = vin.NormalL;
     vout.TexC = mul(float4(vin.TexC, 0.0f, 1.0f), gMatTransform).xy;
 
     return vout;
 }
-
 
 PatchTess ConstantHS(InputPatch<VertexOut, 3> patch, uint patchID : SV_PrimitiveID)
 {

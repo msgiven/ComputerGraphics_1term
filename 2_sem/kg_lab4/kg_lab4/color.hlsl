@@ -184,8 +184,8 @@ DomainOut DS(PatchTess patchTess, float3 uvw : SV_DomainLocation, const OutputPa
     float2 tex = quad[0].TexC * uvw.x + quad[1].TexC * uvw.y + quad[2].TexC * uvw.z;
     float3 t = quad[0].TangentW * uvw.x + quad[1].TangentW * uvw.y + quad[2].TangentW * uvw.z;
     float height = gHeightMap.SampleLevel(gsamAnisotropicWrap, tex, 0.0f).r;
-   // p += normalize(n) * ((height * 2.0f - 1.0f) * gDispScale);
-    //d.TangentW = t;
+    p += normalize(n) * ((height * 2.0f - 1.0f) * gDispScale);
+    d.TangentW = t;
     d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
     d.NormalW = n;
     d.TexC = tex;

@@ -62,11 +62,11 @@ VertexOut VS(VertexIn vin)
 
 float4 PS(VertexOut pin) : SV_Target
 {
-    float3 albedo = gDiffuseMap.Sample(gsamAnisotropicWrap, pin.TexC).rgb;
     float2 centeredUv = pin.TexC * 2.0f - 1.0f;
     float radial = saturate(1.0f - dot(centeredUv, centeredUv));
     float glowAtten = 0.30f + radial * radial * 2.70f;
 
-    float3 emissive = albedo * gDiffuseAlbedo.rgb * glowAtten;
+    float3 emissive = gDiffuseAlbedo.rgb * glowAtten;
+    
     return float4(emissive, 1.0f);
 }

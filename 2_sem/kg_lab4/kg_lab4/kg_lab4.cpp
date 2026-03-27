@@ -196,7 +196,7 @@ bool Meow::Initialize()
 {
     if(!D3DApp::Initialize())
 		return false;
-    ThrowIfFailed(mDirectCmdListAlloc->Reset());
+    //ThrowIfFailed(mDirectCmdListAlloc->Reset());
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
     LoadModelAndTextures();
@@ -369,6 +369,7 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->IASetIndexBuffer(&ibv);
         mCommandList->IASetPrimitiveTopology(ri->PrimitiveType);
 
+        mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
         CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
         int texIdx = (ri->Mat->DiffuseSrvHeapIndex >= 0) ? ri->Mat->DiffuseSrvHeapIndex : 0;
         texHandle.Offset(texIdx, srvSize);
@@ -388,8 +389,9 @@ void Meow::Draw(const GameTimer& gt)
         auto ibv = ri->Geo->IndexBufferView();
         mCommandList->IASetVertexBuffers(0, 1, &vbv);
         mCommandList->IASetIndexBuffer(&ibv);
-        mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST/*ri->PrimitiveType*/);
+       // mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST/*ri->PrimitiveType*/);
 
+        mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
         CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
         int texIdx = (ri->Mat->DiffuseSrvHeapIndex >= 0) ? ri->Mat->DiffuseSrvHeapIndex : 0;
         texHandle.Offset(texIdx, srvSize);
@@ -538,7 +540,7 @@ void Meow::BuildRootSignature() {
     CD3DX12_DESCRIPTOR_RANGE texTable;
     texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0, 0, D3D12_DESCRIPTOR_RANGE_OFFSET_APPEND);
 
-    slotRootParametr[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
+    slotRootParametr[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_ALL);
     slotRootParametr[1].InitAsConstantBufferView(0);
     slotRootParametr[2].InitAsConstantBufferView(1);
     slotRootParametr[3].InitAsConstantBufferView(2);
@@ -610,10 +612,32 @@ void Meow::BuildDescriptorHeaps()
 
         auto createSrvAtIndex = [&](const std::string& texName, int descriptorIndex) {
             auto texIt = mTextures.find(texName);
+
+            // Сразу вычисляем позицию дескриптора
+            CD3DX12_CPU_DESCRIPTOR_HANDLE dst(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+            dst.Offset(descriptorIndex, srvSize);
+
+            // Если текстура не найдена, ищем дефолтную
             if (texIt == mTextures.end() || !texIt->second || !texIt->second->resource) {
-                return;
+                texIt = mTextures.find("background.dds");
+
+                // Если даже дефолтной НЕТ, создаем безопасный Null-дескриптор!
+                if (texIt == mTextures.end() || !texIt->second || !texIt->second->resource) {
+                    D3D12_SHADER_RESOURCE_VIEW_DESC nullSrvDesc = {};
+                    nullSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+                    nullSrvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+                    nullSrvDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+                    nullSrvDesc.Texture2D.MostDetailedMip = 0;
+                    nullSrvDesc.Texture2D.MipLevels = 1;
+                    nullSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
+
+                    // Передаем nullptr вместо ресурса
+                    md3dDevice->CreateShaderResourceView(nullptr, &nullSrvDesc, dst);
+                    return;
+                }
             }
 
+            // Если текстура найдена - создаем нормальный SRV
             auto resource = texIt->second->resource;
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -622,8 +646,6 @@ void Meow::BuildDescriptorHeaps()
             srvDesc.Texture2D.MostDetailedMip = 0;
             srvDesc.Texture2D.MipLevels = resource->GetDesc().MipLevels;
 
-            CD3DX12_CPU_DESCRIPTOR_HANDLE dst(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
-            dst.Offset(descriptorIndex, srvSize);
             md3dDevice->CreateShaderResourceView(resource.Get(), &srvDesc, dst);
             };
 
@@ -712,7 +734,7 @@ void Meow::AddSpotDeferredLight(const XMFLOAT3& position, const XMFLOAT3& direct
 
 void Meow::BuildDeferredLights()
 {
-    UINT kPointLights = 1000;
+    UINT kPointLights = 100;
     mStaticLights.clear();
     mDeferredLights.clear();
     mNumDirLights = 0;
@@ -840,8 +862,8 @@ void Meow::LoadModelAndTextures()
     std::string baseDirSponza = "sponza\\";
     std::string fileNameSponza = "sponza.obj";
 
-    std::string baseDirStone = "old_stone\\";
-    std::string fileNameStone = "D:\\GitHub\\ComputerGraphics_1term\\2_sem\\kg_lab4\\kg_lab4\\old_stone\\Sketchfab.fbx";
+    std::string baseDirStone = "black-swan\\";
+    std::string fileNameStone = baseDirStone + "black swan.fbx";
 
     Assimp::Importer importer;
     const aiScene* sponza = importer.ReadFile(fileNameSponza,
@@ -874,8 +896,10 @@ void Meow::LoadModelAndTextures()
         }
 
         auto tex = std::make_unique<Texture>();
+
         std::string fullPath = baseDir + texName;
         std::wstring wfullPath(fullPath.begin(), fullPath.end());
+
         HRESULT hr = DirectX::CreateDDSTextureFromFile12(md3dDevice.Get(), mCommandList.Get(), wfullPath.c_str(), tex->resource, tex->uploadHeap);
         if (FAILED(hr)) {
             return false;
@@ -884,8 +908,7 @@ void Meow::LoadModelAndTextures()
         tex->name = texName;
         mTextures[texName] = std::move(tex);
         return true;
-    };
-
+        };
 
 
     loadTextureIfNeeded(baseDirSponza, defaultDiffuseTexName);
@@ -895,7 +918,7 @@ void Meow::LoadModelAndTextures()
         aiMaterial* aiMat = sponza->mMaterials[i];
         aiString matName;
         aiMat->Get(AI_MATKEY_NAME, matName);
-        std::string name = matName.C_Str();
+        std::string name = matName.C_Str() + std::string("_") + std::to_string(i);
 
         auto mat = std::make_unique<Material>();
         mat->name = name;
@@ -973,8 +996,6 @@ void Meow::LoadModelAndTextures()
             OutputDebugStringA("Найдено в UNKNOWN!\n");
         }
         else {
-          //  std::string msg = "pizdez на материале: " + name + "\n";
-           // MessageBoxA(nullptr, msg.c_str(), "DEBUG", MB_OK);
             normalTexName = defaultNormalTexName;
         }
         size_t nLastDot = normalTexName.find_last_of(".");
@@ -1035,8 +1056,13 @@ void Meow::LoadModelAndTextures()
 
         aiMaterial* aiMat = sponza->mMaterials[mesh->mMaterialIndex];
         aiString mName; aiMat->Get(AI_MATKEY_NAME, mName);
-        ritem->Mat = mMaterials[mName.C_Str()].get();
-
+        std::string uniqueName = mName.C_Str() + std::string("_") + std::to_string(mesh->mMaterialIndex);
+        ritem->Mat = mMaterials[uniqueName].get();
+        if (ritem->Mat == nullptr) {
+            std::string errorMsg = "Material not found for ывавыппявыа: " + uniqueName;
+            MessageBoxA(nullptr, errorMsg.c_str(), "Error", MB_OK);
+            __debugbreak();
+        }
         mAllRitems.push_back(std::move(ritem));
     }
 
@@ -1085,7 +1111,7 @@ void Meow::LoadModelAndTextures()
                 }
             }
 
-            //loadTextureIfNeeded(baseDirSponza, fallback);
+            loadTextureIfNeeded(baseDirSponza, fallback);
             return fallback;
         };
 
@@ -1094,7 +1120,7 @@ void Meow::LoadModelAndTextures()
             aiMaterial* aiMat = oldStone->mMaterials[i];
             aiString matName;
             aiMat->Get(AI_MATKEY_NAME, matName);
-            std::string name = std::string("old_stone_") + matName.C_Str();
+            std::string name = std::string("old_stone_") + matName.C_Str() + std::string("_") + std::to_string(i);
 
             auto mat = std::make_unique<Material>();
             mat->name = name;
@@ -1104,31 +1130,18 @@ void Meow::LoadModelAndTextures()
             mat->HeightSrvHeapIndex = srvHeapIndex + 2;
             srvHeapIndex += 3;
 
-            std::string diffusePath;
-            aiString texPath;
-            if (aiMat->GetTexture(aiTextureType_DIFFUSE, 0, &texPath) == AI_SUCCESS) {
-                diffusePath = texPath.C_Str();
-            }
-            diffusePath = "textures\\Stone_Pathway_Base_Color";
-            mat->DiffuseMapName = tryLoadTextureVariants(diffusePath, defaultDiffuseTexName);
-            std::string normalPath;
-            if (aiMat->GetTexture(aiTextureType_NORMALS, 0, &texPath) == AI_SUCCESS ||
-                aiMat->GetTexture(static_cast<aiTextureType>(8), 0, &texPath) == AI_SUCCESS ||
-                aiMat->GetTexture(aiTextureType_HEIGHT, 0, &texPath) == AI_SUCCESS) {
-                normalPath = texPath.C_Str();
-            }
-            normalPath = "textures\\Stone_Pathway_Normal";
-            
-            mat->NormalMapName = tryLoadTextureVariants(normalPath, defaultNormalTexName);
+            std::string diffuseTexName = "textures\\bswan_col.dds";
+            std::string normalTexName = "textures\\bswan_nor.dds";
+            std::string heightTexName = "textures\\bswan_displacement.dds";
+            loadTextureIfNeeded(baseDirStone, diffuseTexName);
+            loadTextureIfNeeded(baseDirStone, normalTexName);
+            loadTextureIfNeeded(baseDirStone, heightTexName);
 
-            std::string heightPath;
-            if (aiMat->GetTexture(aiTextureType_DISPLACEMENT, 0, &texPath) == AI_SUCCESS ||
-                aiMat->GetTexture(aiTextureType_HEIGHT, 0, &texPath) == AI_SUCCESS) {
-                heightPath = texPath.C_Str();
-            }
-            heightPath = "textures\\Stone_Pathway_Height";
-            mat->HeightMapName = tryLoadTextureVariants(heightPath, defaultHeightTexName);
-            mat->dispScale = heightPath.empty() ? 0.0f : 0.03f;
+            mat->DiffuseMapName = diffuseTexName;
+            mat->NormalMapName = normalTexName;
+            mat->HeightMapName = heightTexName;
+
+            mat->dispScale = 0.05f;
 
             mMaterials[name] = std::move(mat);
         }
@@ -1171,9 +1184,13 @@ void Meow::LoadModelAndTextures()
 
             aiMaterial* aiMat = oldStone->mMaterials[mesh->mMaterialIndex];
             aiString mName; aiMat->Get(AI_MATKEY_NAME, mName);
-            std::string fullName = std::string("old_stone_") + mName.C_Str();
+            std::string fullName = std::string("old_stone_") + mName.C_Str() + std::string("_") + std::to_string(mesh->mMaterialIndex);
             ritem->Mat = mMaterials[fullName].get();
-
+            if (ritem->Mat == nullptr) {
+                std::string errorMsg = "Material not found for Swan: " + fullName;
+                MessageBoxA(nullptr, errorMsg.c_str(), "Error", MB_OK);
+                __debugbreak();
+            }
             mAllRitems.push_back(std::move(ritem));
         }
     }
