@@ -143,7 +143,6 @@ PatchTess ConstantHS(InputPatch<VertexOut, 3> patch, uint patchID : SV_Primitive
     const float tessMin = 1.0f;
     const float tessMax = 32.0f;
     
-    // 5. Calculate final tessellation factor
     float tess = lerp(tessMax, tessMin, saturate((d - dMin) / (dMax - dMin)));
     pt.OuterTess[0] = tess;
     pt.OuterTess[1] = tess;

@@ -159,6 +159,9 @@ private:
     std::vector<RenderItem*> mBulletRitems;
     std::unique_ptr<MeshGeometry> mBulletGeo = nullptr;
 
+    std::unique_ptr<MeshGeometry> mQuadGeo = nullptr;
+    std::vector<RenderItem*> mWaterRitems;
+
     struct BulletState
     {
         bool IsActive = false;
@@ -169,7 +172,7 @@ private:
     };
 
     static constexpr UINT kMaxBullets = 1500;
-    static constexpr float kBulletSpeed = 180.0f;
+    static constexpr float kBulletSpeed = 100.0f;
     static constexpr float kBulletLifeTime = 8.0f;
     static constexpr float kBulletRadius = 0.35f;
     std::array<BulletState, kMaxBullets> mBullets;
@@ -1178,7 +1181,6 @@ void Meow::LoadModelAndTextures()
 
             auto ritem = std::make_unique<RenderItem>();
             XMMATRIX scale = XMMatrixScaling(10.5f, 10.5f, 10.5f);
-            // Pitch (X), Yaw (Y), Roll (Z) 
             XMMATRIX rot = XMMatrixRotationRollPitchYaw(XMConvertToRadians(-90.0f), XMConvertToRadians(90.0f), XMConvertToRadians(0.0f));
             XMMATRIX offset = XMMatrixTranslation(20.0f, 5.0f, -10.0f);
 
@@ -1213,6 +1215,88 @@ void Meow::LoadModelAndTextures()
     mModelSponza->IndexFormat = DXGI_FORMAT_R32_UINT;
     mModelSponza->IndexBufferByteSize = ibByteSize;
 
+    std::vector<Vertex> quadVertices;
+    std::vector<std::uint32_t> quadIndices;
+
+    float width = 1.0f;
+    float height = 1.0f;
+
+    Vertex v0, v1, v2, v3;
+    v0.Pos = { -width, 0.0f, -height};
+    v1.Pos = { width, 0.0f, -height};
+    v2.Pos = { -width, 0.0f,  height};
+    v3.Pos = { width, 0.0f,  height};
+
+    XMFLOAT3 normal = { 0.0f, 1.0f, 0.0f };
+    v0.Normal = normal;
+    v1.Normal = normal;
+    v2.Normal = normal;
+    v3.Normal = normal;
+
+    v0.TexC = { 0.0f, 0.0f };
+    v1.TexC = { 1.0f, 0.0f };
+    v2.TexC = { 0.0f, 1.0f };
+    v3.TexC = { 1.0f, 1.0f };
+
+    v0.TangentU = { 1.0f, 0.0f, 0.0f };
+    v1.TangentU = { 1.0f, 0.0f, 0.0f };
+    v2.TangentU = { 1.0f, 0.0f, 0.0f };
+    v3.TangentU = { 1.0f, 0.0f, 0.0f };
+
+    quadVertices.push_back(v0);
+    quadVertices.push_back(v1);
+    quadVertices.push_back(v2);
+    quadVertices.push_back(v3);
+
+    quadIndices.push_back(0);
+    quadIndices.push_back(2);
+    quadIndices.push_back(1);
+
+    quadIndices.push_back(1);
+    quadIndices.push_back(2);
+    quadIndices.push_back(3);
+
+    auto quadMat = std::make_unique<Material>();
+    quadMat->matCBIndex = static_cast<UINT>(mMaterials.size());
+    quadMat->DiffuseSrvHeapIndex = srvHeapIndex;
+    quadMat->NormalSrvHeapIndex = srvHeapIndex + 1;
+    quadMat->HeightSrvHeapIndex = srvHeapIndex + 2;
+    quadMat->DiffuseMapName = defaultDiffuseTexName;
+    quadMat->NormalMapName = defaultNormalTexName;
+    quadMat->HeightMapName = defaultHeightTexName;
+    quadMat->name = "Water";
+    quadMat->diffuseAlbedo = { 0.01f, 0.1f, 0.9f, 1.0f };
+    quadMat->fresnelRO = { 0.9f, 0.8f, 0.2f };
+    quadMat->roughness = 0.01f;
+    mMaterials[quadMat->name] = std::move(quadMat);
+    srvHeapIndex += 3;
+
+    mQuadGeo = std::make_unique<MeshGeometry>();
+    mQuadGeo->Name = "Quad";
+
+    const UINT quadVBByteSize = static_cast<UINT>(quadVertices.size() * sizeof(Vertex));
+    const UINT quadIBByteSize = static_cast<UINT>(quadIndices.size() * sizeof(std::uint32_t));
+    mQuadGeo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(), mCommandList.Get(), quadVertices.data(), quadVBByteSize, mQuadGeo->VertexBufferUploader);
+    mQuadGeo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(), mCommandList.Get(), quadIndices.data(), quadIBByteSize, mQuadGeo->IndexBufferUploader);
+    mQuadGeo->VertexByteStride = sizeof(Vertex);
+    mQuadGeo->VertexBufferByteSize = quadVBByteSize;
+    mQuadGeo->IndexFormat = DXGI_FORMAT_R32_UINT;
+    mQuadGeo->IndexBufferByteSize = quadIBByteSize;
+
+    auto quadRitem = std::make_unique<RenderItem>();
+    quadRitem->World = MathHelper::Identity4x4();
+    XMStoreFloat4x4(&quadRitem->World, XMMatrixScaling(100.1f, 1.0f, 100.1f));
+    quadRitem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
+    quadRitem->Geo = mQuadGeo.get();
+    quadRitem->Mat = mMaterials["Water"].get();
+    quadRitem->IndexCount = static_cast<UINT>(quadIndices.size());
+    quadRitem->StartIndexLocation = 0;
+    quadRitem->BaseVertexLocation = 0;
+    quadRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
+
+    mAllRitems.push_back(std::move(quadRitem));
+    
+
 #pragma region CurtainsAndBullets
 
     for (auto& e : mAllRitems) {
@@ -1220,7 +1304,7 @@ void Meow::LoadModelAndTextures()
 
         std::transform(matName.begin(), matName.end(), matName.begin(), ::tolower);
 
-        if (matName.find("fabric") != std::string::npos || matName.find("curtain") != std::string::npos) {
+        if (matName.find("fabric") != std::string::npos || matName.find("curtain") != std::string::npos || matName.find("water") != std::string::npos) {
             mCurtainRitems.push_back(e.get());
         }
         else {
@@ -1395,9 +1479,9 @@ void Meow::UpdateBulletLights()
             bulletLight.Position = bullet.Position;
             bulletLight.Strength = XMFLOAT3(100.0f, 100.5f, 100.0f);
             bulletLight.FalloffStart = 0.9f;
-            bulletLight.FalloffEnd = 2.5f; 
+            bulletLight.FalloffEnd = 20.5f; 
             bulletLight.Direction = XMFLOAT3(1.0f, -1.0f, 1.0f);
-            bulletLight.SpotPower = 10.0f;
+            bulletLight.SpotPower = 100.0f;
 
             mDeferredLights.push_back(bulletLight);
             bulletLightCount++;
