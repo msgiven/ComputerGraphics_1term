@@ -318,6 +318,8 @@ void Meow::UpdateObjectCBs(const GameTimer& gt) {
 
         ObjectConstants objConst;
         XMStoreFloat4x4(&objConst.WorldViewProj, XMMatrixTranspose(worldViewProj));
+        XMStoreFloat4x4(&objConst.World, XMMatrixTranspose(world)); 
+
         mObjectCB->CopyData(e->ObjCBIndex, objConst);
     }
 }
@@ -1175,7 +1177,12 @@ void Meow::LoadModelAndTextures()
             }
 
             auto ritem = std::make_unique<RenderItem>();
-            XMStoreFloat4x4(&ritem->World, XMMatrixScaling(10.5f, 10.5f, 10.5f) * XMMatrixTranslation(10.0f, 2.0f, 0.0f));
+            XMMATRIX scale = XMMatrixScaling(10.5f, 10.5f, 10.5f);
+            // Pitch (X), Yaw (Y), Roll (Z) 
+            XMMATRIX rot = XMMatrixRotationRollPitchYaw(XMConvertToRadians(-90.0f), XMConvertToRadians(90.0f), XMConvertToRadians(0.0f));
+            XMMATRIX offset = XMMatrixTranslation(20.0f, 5.0f, -10.0f);
+
+            XMStoreFloat4x4(&ritem->World, scale * rot * offset);
             ritem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
             ritem->Geo = mModelSponza.get();
             ritem->IndexCount = subMesh.IndexCount;
@@ -1306,7 +1313,7 @@ void Meow::InitBulletPool()
         bulletRI->IndexCount = submeshIndexCount;
         bulletRI->StartIndexLocation = 0;
         bulletRI->BaseVertexLocation = 0;
-        //ebulletRI->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        bulletRI->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
         XMStoreFloat4x4(&bulletRI->World, XMMatrixTranslation(0.0f, -10000.0f, 0.0f));
 
         mBullets[i].RenderProxy = bulletRI.get();

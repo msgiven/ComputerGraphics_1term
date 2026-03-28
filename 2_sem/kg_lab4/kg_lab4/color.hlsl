@@ -27,6 +27,7 @@ SamplerState gsamAnisotropicClamp : register(s5);
 cbuffer cbPerObject : register(b0)
 {
     float4x4 gWorldViewProj;
+    float4x4 gWorld;
     //float4x4 gTexTransform;
 };
 
@@ -131,10 +132,22 @@ VertexOut VS(VertexIn vin)
 PatchTess ConstantHS(InputPatch<VertexOut, 3> patch, uint patchID : SV_PrimitiveID)
 {
     PatchTess pt;
+    float3 centerL = (patch[0].PosL + patch[1].PosL + patch[2].PosL) / 3.0f;
     
-    pt.OuterTess[0] = 3;
-    pt.OuterTess[1] = 3;
-    pt.OuterTess[2] = 3;
+    float3 centerW = mul(float4(centerL, 1.0f), gWorld).xyz;
+    
+    float d = distance(centerW, gEyePosW);
+
+    const float dMin = 15.0f; 
+    const float dMax = 100.0f;
+    const float tessMin = 1.0f;
+    const float tessMax = 32.0f;
+    
+    // 5. Calculate final tessellation factor
+    float tess = lerp(tessMax, tessMin, saturate((d - dMin) / (dMax - dMin)));
+    pt.OuterTess[0] = tess;
+    pt.OuterTess[1] = tess;
+    pt.OuterTess[2] = tess;
   //  pt.OuterTess[3] = 3;
     
     //pt.InnerTess[0] = 3;

@@ -79,7 +79,7 @@ struct MaterialConstants {
 
 struct ObjectConstants {
 	XMFLOAT4X4 WorldViewProj = MathHelper::Identity4x4();
-
+	XMFLOAT4X4 World = MathHelper::Identity4x4();
 };
 
 struct Light {
