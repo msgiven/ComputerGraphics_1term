@@ -10,6 +10,7 @@ SamplerState gsamAnisotropicWrap : register(s4);
 cbuffer cbPerObject : register(b0)
 {
     float4x4 gWorldViewProj;
+    float4x4 gWorld;
 };
 
 cbuffer cbPass : register(b1)
@@ -117,35 +118,56 @@ HullOut HS(InputPatch<VertexOut, 3> patch, uint i : SV_OutputControlPointID, uin
 }
 
 [domain("tri")]
-DomainOut DS(PatchTess patchTess, float3 uvw : SV_DomainLocation, const OutputPatch<HullOut, 3> quad)
+DomainOut DS_Water(PatchTess patchTess, float3 uvw : SV_DomainLocation, const OutputPatch<HullOut, 3> quad)
 {
     DomainOut d;
-    
     float3 p = quad[0].PosL * uvw.x + quad[1].PosL * uvw.y + quad[2].PosL * uvw.z;
-
+    
     float waveSpeed = 2.0f;
-    float waveHeight = 1.5f; 
-    float frequency = 0.5f;
+    float waveHeight = 2.5f;
+    float frequency = 10.5f;
     
     p.y += sin(p.x * frequency + gTotalTime * waveSpeed) * waveHeight;
     p.y += cos(p.z * frequency * 0.8f + gTotalTime * waveSpeed * 1.1f) * waveHeight * 0.5f;
-
+    
+    float4 posW = mul(float4(p, 1.0f), gWorld);
+    d.PosW = posW.xyz;
 
     d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
+    d.NormalW = normalize(quad[0].NormalW * uvw.x + quad[1].NormalW * uvw.y + quad[2].NormalW * uvw.z);
+    d.TexC = quad[0].TexC * uvw.x + quad[1].TexC * uvw.y + quad[2].TexC * uvw.z;
     
-    //d.PosW = mul(float4(p, 1.0f), gWorld).xyz; 
+    return d;
+   
+}
 
+[domain("tri")]
+DomainOut DS_Curtain(PatchTess patchTess, float3 uvw : SV_DomainLocation, const OutputPatch<HullOut, 3> quad)
+{
+    DomainOut d;
+    float3 p = quad[0].PosL * uvw.x + quad[1].PosL * uvw.y + quad[2].PosL * uvw.z;
+    
+    float windSpeed = 3.0f;
+    float windForce = 0.3f;
+    
+    p.x += sin(gTotalTime * windSpeed + p.y) * windForce;
+    p.z += cos(gTotalTime * windSpeed * 0.8f + p.y) * windForce * 0.5f;
+    
+    d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
     d.NormalW = normalize(quad[0].NormalW * uvw.x + quad[1].NormalW * uvw.y + quad[2].NormalW * uvw.z);
     d.TexC = quad[0].TexC * uvw.x + quad[1].TexC * uvw.y + quad[2].TexC * uvw.z;
     
     return d;
 }
 
-float4 PS(DomainOut pin) : SV_Target
+float4 PS_Water(DomainOut pin) : SV_Target
 {
-    float4 diffuseAlbedo = gDiffuseMap.Sample(gsamAnisotropicWrap, pin.TexC) * gDiffuseAlbedo;
-    
-    diffuseAlbedo.a = 0.5f; 
-    
-    return diffuseAlbedo;
+    float4 waterColor = float4(0.1f, 0.4f, 0.9f, 0.6f);
+    return waterColor * gDiffuseAlbedo;
+}
+
+
+float4 PS_Curtain(DomainOut pin) : SV_Target
+{
+    return gDiffuseMap.Sample(gsamAnisotropicWrap, pin.TexC) * gDiffuseAlbedo;
 }

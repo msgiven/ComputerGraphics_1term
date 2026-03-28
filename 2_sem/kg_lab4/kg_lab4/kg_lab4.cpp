@@ -149,7 +149,13 @@ private:
     std::vector<std::string> mTextureOrder;
     std::unique_ptr<MeshGeometry> mModelSponza = nullptr;
     std::vector<RenderItem*> mCurtainRitems;
+    ComPtr<ID3DBlob> mdsWaterByteCode = nullptr;
+    ComPtr<ID3DBlob> mdsCurtainByteCode = nullptr;
+    ComPtr<ID3DBlob> mpsWaterByteCode = nullptr;
+    ComPtr<ID3DBlob> mpsCurtainByteCode = nullptr;
 
+    ComPtr<ID3D12PipelineState> mWaterPSO = nullptr;
+    ComPtr<ID3D12PipelineState> mCurtainPSO = nullptr;
     std::unique_ptr<UploadBuffer<Light>> mLightSB;
     std::vector<Light> mDeferredLights;
     UINT mNumDirLights = 0;
@@ -386,9 +392,7 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
     }
 
-
-    mCommandList->SetPipelineState(mWavePSO.Get());
-
+    mCommandList->SetPipelineState(mCurtainPSO.Get());
     for (auto ri : mCurtainRitems) {
         auto vbv = ri->Geo->VertexBufferView();
         auto ibv = ri->Geo->IndexBufferView();
@@ -408,7 +412,25 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
     }
 
+    mCommandList->SetPipelineState(mWaterPSO.Get());
+    for (auto ri : mWaterRitems) {
+        auto vbv = ri->Geo->VertexBufferView();
+        auto ibv = ri->Geo->IndexBufferView();
+        mCommandList->IASetVertexBuffers(0, 1, &vbv);
+        mCommandList->IASetIndexBuffer(&ibv);
+        // mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST/*ri->PrimitiveType*/);
 
+        mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+        CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+        int texIdx = (ri->Mat->DiffuseSrvHeapIndex >= 0) ? ri->Mat->DiffuseSrvHeapIndex : 0;
+        texHandle.Offset(texIdx, srvSize);
+
+        mCommandList->SetGraphicsRootDescriptorTable(0, texHandle);
+        mCommandList->SetGraphicsRootConstantBufferView(1, mObjectCB->Resource()->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBByteSize);
+        mCommandList->SetGraphicsRootConstantBufferView(3, mMaterialCB->Resource()->GetGPUVirtualAddress() + ri->Mat->matCBIndex * matCBByteSize);
+
+        mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
+    }
 
     mgBuffer->TransitToLightRenderingState(mCommandList);
     
@@ -842,9 +864,12 @@ void Meow::BuildShadersAndInputLayout()
         mpsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "PS", "ps_5_0");
        
         mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
-        mpsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "PS", "ps_5_0");
         mhsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "HS", "hs_5_0");
-        mdsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "DS", "ds_5_0");
+
+        mdsWaterByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "DS_Water", "ds_5_0");
+        mdsCurtainByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "DS_Curtain", "ds_5_0");
+        mpsWaterByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "PS_Water", "ps_5_0");
+        mpsCurtainByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "PS_Curtain", "ps_5_0");
 
         mvsGlowByteCode = d3dUtil::CompileShader(glowShaderPath, nullptr, "VS", "vs_5_0");
         mpsGlowByteCode = d3dUtil::CompileShader(glowShaderPath, nullptr, "PS", "ps_5_0");
@@ -1285,7 +1310,7 @@ void Meow::LoadModelAndTextures()
 
     auto quadRitem = std::make_unique<RenderItem>();
     quadRitem->World = MathHelper::Identity4x4();
-    XMStoreFloat4x4(&quadRitem->World, XMMatrixScaling(100.1f, 1.0f, 100.1f));
+    XMStoreFloat4x4(&quadRitem->World, XMMatrixScaling(100.1f, 1.0f, 100.1f)* XMMatrixTranslation(0.0f, 5.0f, 0.0f));
     quadRitem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
     quadRitem->Geo = mQuadGeo.get();
     quadRitem->Mat = mMaterials["Water"].get();
@@ -1301,16 +1326,19 @@ void Meow::LoadModelAndTextures()
 
     for (auto& e : mAllRitems) {
         std::string matName = e->Mat->name;
-
         std::transform(matName.begin(), matName.end(), matName.begin(), ::tolower);
 
-        if (matName.find("fabric") != std::string::npos || matName.find("curtain") != std::string::npos || matName.find("water") != std::string::npos) {
+        if (matName.find("water") != std::string::npos) {
+            mWaterRitems.push_back(e.get());
+        }
+        else if (matName.find("fabric") != std::string::npos || matName.find("curtain") != std::string::npos) {
             mCurtainRitems.push_back(e.get());
         }
         else {
             mOpaqueRitems.push_back(e.get());
         }
     }
+
     auto bulletMat = std::make_unique<Material>();
     bulletMat->name = "BulletGlow";
     bulletMat->matCBIndex = static_cast<UINT>(mMaterials.size());
@@ -1532,11 +1560,28 @@ void Meow::BuildPSO() {
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSO)));
 
     psoDesc.VS = { reinterpret_cast<BYTE*>(mvsWaveByteCode->GetBufferPointer()), mvsWaveByteCode->GetBufferSize() };
-    psoDesc.PS = { reinterpret_cast<BYTE*>(mpsWaveByteCode->GetBufferPointer()), mpsWaveByteCode->GetBufferSize() };
     psoDesc.HS = { reinterpret_cast<BYTE*>(mhsWaveByteCode->GetBufferPointer()), mhsWaveByteCode->GetBufferSize() };
-    psoDesc.DS = { reinterpret_cast<BYTE*>(mdsWaveByteCode->GetBufferPointer()), mdsWaveByteCode->GetBufferSize() };
+    psoDesc.DS = { reinterpret_cast<BYTE*>(mdsCurtainByteCode->GetBufferPointer()), mdsCurtainByteCode->GetBufferSize() };
+    psoDesc.PS = { reinterpret_cast<BYTE*>(mpsCurtainByteCode->GetBufferPointer()), mpsCurtainByteCode->GetBufferSize() };
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mCurtainPSO)));
 
-    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mWavePSO)));
+    psoDesc.DS = { reinterpret_cast<BYTE*>(mdsWaterByteCode->GetBufferPointer()), mdsWaterByteCode->GetBufferSize() };
+    psoDesc.PS = { reinterpret_cast<BYTE*>(mpsWaterByteCode->GetBufferPointer()), mpsWaterByteCode->GetBufferSize() };
+
+    D3D12_RENDER_TARGET_BLEND_DESC transparencyBlendDesc;
+    transparencyBlendDesc.BlendEnable = true;
+    transparencyBlendDesc.LogicOpEnable = false;
+    transparencyBlendDesc.SrcBlend = D3D12_BLEND_SRC_ALPHA;
+    transparencyBlendDesc.DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+    transparencyBlendDesc.BlendOp = D3D12_BLEND_OP_ADD;
+    transparencyBlendDesc.SrcBlendAlpha = D3D12_BLEND_ONE;
+    transparencyBlendDesc.DestBlendAlpha = D3D12_BLEND_ZERO;
+    transparencyBlendDesc.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    transparencyBlendDesc.LogicOp = D3D12_LOGIC_OP_NOOP;
+    transparencyBlendDesc.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+    psoDesc.BlendState.RenderTarget[0] = transparencyBlendDesc;
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mWaterPSO)));
 }
 
 void Meow::BuildDisplayPSO()
