@@ -70,15 +70,15 @@ struct PatchTess
 
 struct HullOut
 {
-    float3 PosL : POSITION; 
+    float3 PosL : POSITION;
     float3 NormalW : NORMAL;
     float2 TexC : TEXCOORD;
 };
 
 struct DomainOut
 {
-    float4 PosH : SV_POSITION; 
-    float3 PosW : POSITION; 
+    float4 PosH : SV_POSITION;
+    float3 PosW : POSITION;
     float3 NormalW : NORMAL;
     float2 TexC : TEXCOORD;
 };
@@ -117,6 +117,8 @@ HullOut HS(InputPatch<VertexOut, 3> patch, uint i : SV_OutputControlPointID, uin
     return h;
 }
 
+
+
 [domain("tri")]
 DomainOut DS_Water(PatchTess patchTess, float3 uvw : SV_DomainLocation, const OutputPatch<HullOut, 3> quad)
 {
@@ -136,7 +138,6 @@ DomainOut DS_Water(PatchTess patchTess, float3 uvw : SV_DomainLocation, const Ou
     d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
     d.NormalW = normalize(quad[0].NormalW * uvw.x + quad[1].NormalW * uvw.y + quad[2].NormalW * uvw.z);
     d.TexC = quad[0].TexC * uvw.x + quad[1].TexC * uvw.y + quad[2].TexC * uvw.z;
-    
     return d;
    
 }
@@ -148,10 +149,9 @@ DomainOut DS_Curtain(PatchTess patchTess, float3 uvw : SV_DomainLocation, const 
     float3 p = quad[0].PosL * uvw.x + quad[1].PosL * uvw.y + quad[2].PosL * uvw.z;
     
     float windSpeed = 3.0f;
-    float windForce = 0.3f;
     
-    p.x += sin(gTotalTime * windSpeed + p.y) * windForce;
-    p.z += cos(gTotalTime * windSpeed * 0.8f + p.y) * windForce * 0.5f;
+    p.x += sin(gTotalTime * windSpeed + p.y);
+    p.z += cos(gTotalTime * windSpeed * 0.8f + p.y) * 0.5f;
     
     d.PosH = mul(float4(p, 1.0f), gWorldViewProj);
     d.NormalW = normalize(quad[0].NormalW * uvw.x + quad[1].NormalW * uvw.y + quad[2].NormalW * uvw.z);
@@ -162,8 +162,26 @@ DomainOut DS_Curtain(PatchTess patchTess, float3 uvw : SV_DomainLocation, const 
 
 float4 PS_Water(DomainOut pin) : SV_Target
 {
-    float4 waterColor = float4(0.1f, 0.4f, 0.9f, 0.6f);
-    return waterColor * gDiffuseAlbedo;
+    float3 baseWater = float3(0.05f, 0.22f, 0.55f) * gDiffuseAlbedo.rgb;
+    float3 normalW = normalize(pin.NormalW);
+    float3 viewDirW = normalize(gEyePosW - pin.PosW);
+    
+    float NdotV = saturate(dot(normalW, viewDirW));
+    float fresnel = pow(1.0f - NdotV, 10.0f);
+    float whiteStripe = smoothstep(0.95f, 0.95f, fresnel);
+    float dist = length(gEyePosW - pin.PosW);
+
+    float fade = 1.0f / (1.0f + dist * 0.15f);
+
+    whiteStripe *= fade;
+
+    baseWater += whiteStripe * float3(0.95f, 0.97f, 1.0f);
+
+    float3 reflectPercent = float3(0.08f, 0.08f, 0.08f) + (1.0f - float3(0.08f, 0.08f, 0.08f)) * fresnel;
+    baseWater += reflectPercent * 5.25f;
+
+    float alpha = 0.8f * gDiffuseAlbedo.a;
+    return float4(saturate(baseWater), alpha);
 }
 
 
