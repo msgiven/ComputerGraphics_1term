@@ -39,7 +39,7 @@ inline void ThrowIfFailed(HRESULT hr)
 		char message[64] = {};
 		std::snprintf(message, sizeof(message), "DirectX call failed (hr=0x%08X)", static_cast<unsigned int>(hr));
 		throw std::runtime_error(message);
-	
+
 		//throw std::exception("DirectX call failed");
 	}
 }
@@ -137,7 +137,7 @@ struct GBuffer {
 		rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
 		ThrowIfFailed(device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&mRtvDescriptorHeap)));
 
-		
+
 		D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
 		srvHeapDesc.NumDescriptors = 4;
 		srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -149,7 +149,7 @@ struct GBuffer {
 		UINT srvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 		CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 
-		
+
 		auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
 		auto resDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM, width, height, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
 
@@ -402,4 +402,7 @@ struct RenderItem {
 	UINT IndexCount = 0;
 	UINT StartIndexLocation = 0;
 	int BaseVertexLocation = 0;
+
+	DirectX::BoundingBox LocalBounds = {};
+	DirectX::BoundingBox WorldBounds = {};
 };

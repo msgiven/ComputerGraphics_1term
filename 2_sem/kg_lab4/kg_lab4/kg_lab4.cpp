@@ -1,4 +1,4 @@
-//#define NOMINMAX
+п»ї//#define NOMINMAX
 #include "D3DApp.h"
 #include <DirectXColors.h> 
 #include "d3dUtil.h"
@@ -11,6 +11,12 @@
 #include <string>
 
 #include <cstdint>
+#include <cstdio>
+#include <limits>
+#include <functional>
+#include <unordered_set>
+
+#include <random>
 #include <assimp/postprocess.h>
 #include <DirectXColors.h>
 
@@ -27,19 +33,40 @@ using namespace DirectX;
 struct Vertex
 {
     XMFLOAT3 Pos;
-   // XMFLOAT4 Color;
+    // XMFLOAT4 Color;
     XMFLOAT3 Normal;
     XMFLOAT2 TexC;
     XMFLOAT3 TangentU;
 };
 
+enum class RenderBucket
+{
+    Opaque = 0,
+    Curtain = 1,
+    Water = 2
+};
+
+struct OctreeItem
+{
+    RenderItem* Item = nullptr;
+    RenderBucket Bucket = RenderBucket::Opaque;
+    DirectX::BoundingBox Bounds = {};
+};
+
+struct OctreeNode
+{
+    DirectX::BoundingBox Bounds = {};
+    std::array<std::unique_ptr<OctreeNode>, 8> Children = {};
+    std::vector<OctreeItem> Items;
+    bool IsLeaf = true;
+};
 
 class Meow : public D3DApp
 {
 public:
     Meow(HINSTANCE hInstance);
     ~Meow();
-    
+
     virtual bool Initialize() override;
     virtual void OnResize() override;
     virtual void Update(const GameTimer& gt) override;
@@ -75,20 +102,33 @@ private:
     void UpdateBullets(float dt);
     void UpdateBulletLights();
     void BuildGlowPSO();
+    void UpdateCulling();
+    void BuildSceneOctree();
+    std::unique_ptr<OctreeNode> BuildOctreeNode(const std::vector<OctreeItem>& items, const BoundingBox& bounds, int depth);
+    void QueryOctreeVisible(const OctreeNode* node, const BoundingFrustum& frustum);
+    void AppendSubtreeItems(const OctreeNode* node);
+    BoundingBox ComputeItemWorldBounds(const RenderItem& item) const;
+    static bool IntersectsFrustum(const BoundingFrustum& frustum, const BoundingBox& bounds);
+    static std::array<BoundingBox, 8> SplitBounds(const BoundingBox& parentBounds);
+    static BoundingBox ComputeEnclosingBounds(const std::vector<OctreeItem>& items);
+    void BuildOctreeDebugVisualization();
+
+    void BuildGrass();
+    void BuildGrassRootSignature();
 
     GBuffer* mgBuffer;
 
     XMFLOAT3 mSunThetaPhi = { 1.25f * XM_PI, XM_PIDIV4, 0.0f };
 
     float mYaw = 1.5f * XM_PI;
-    float mPitch = 0.0f; 
+    float mPitch = 0.0f;
 
     float mCameraSpeed = 50.0f;
 
     XMFLOAT3 mForward = { 0.0f, 0.0f, 1.0f };
     XMFLOAT3 mRight = { 1.0f, 0.0f, 0.0f };
     XMFLOAT3 mUp = { 0.0f, 1.0f, 0.0f };
-    
+
     std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> GetStaticSamplers();
 
     std::unique_ptr<MeshGeometry> mBoxGeo = nullptr;
@@ -146,9 +186,11 @@ private:
 
     std::vector<std::unique_ptr<RenderItem>> mAllRitems;
     std::vector<RenderItem*> mOpaqueRitems;
+    std::vector<RenderItem*> mVisibleOpaqueRitems;
     std::vector<std::string> mTextureOrder;
     std::unique_ptr<MeshGeometry> mModelSponza = nullptr;
     std::vector<RenderItem*> mCurtainRitems;
+    std::vector<RenderItem*> mVisibleCurtainRitems;
     ComPtr<ID3DBlob> mdsWaterByteCode = nullptr;
     ComPtr<ID3DBlob> mdsCurtainByteCode = nullptr;
     ComPtr<ID3DBlob> mpsWaterByteCode = nullptr;
@@ -167,6 +209,15 @@ private:
 
     std::unique_ptr<MeshGeometry> mQuadGeo = nullptr;
     std::vector<RenderItem*> mWaterRitems;
+    std::vector<RenderItem*> mVisibleWaterRitems;
+    std::unique_ptr<MeshGeometry> mOctreeDebugGeo = nullptr;
+    std::vector<RenderItem*> mOctreeDebugRitems;
+    std::vector<OctreeItem> mStaticOctreeItems;
+    std::unique_ptr<OctreeNode> mSceneOctree;
+    bool mShowOctreeDebug = true;
+    int mOctreeDebugMaxDepth = 3;
+
+    ComPtr<ID3D12PipelineState> mOctreeDebugPSO = nullptr;
 
     struct BulletState
     {
@@ -189,6 +240,22 @@ private:
     UINT mStaticDirLights = 0;
     UINT mStaticPointLights = 0;
     UINT mStaticSpotLights = 0;
+    UINT mCullingFrameCounter = 0;
+
+
+    struct GrassInstanceData
+    {
+        XMFLOAT3 Position;
+        float Scale;
+    };
+    std::unique_ptr<UploadBuffer<GrassInstanceData>> mGrassInstanceBuffer = nullptr;
+    UINT mGrassInstanceCount = 100000; 
+    ComPtr<ID3D12RootSignature> mGrassRootSignature = nullptr;
+    ComPtr<ID3D12PipelineState> mGrassPSO = nullptr;
+    ComPtr<ID3DBlob> mvsGrassByteCode = nullptr;
+    ComPtr<ID3DBlob> mpsGrassByteCode = nullptr;
+    std::vector<GrassInstanceData> mAllGrassInstances;
+    UINT mVisibleGrassCount = 0;
 };
 
 Meow::Meow(HINSTANCE hInstance)
@@ -203,8 +270,8 @@ Meow::~Meow()
 
 bool Meow::Initialize()
 {
-    if(!D3DApp::Initialize())
-		return false;
+    if (!D3DApp::Initialize())
+        return false;
     //ThrowIfFailed(mDirectCmdListAlloc->Reset());
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
@@ -214,6 +281,8 @@ bool Meow::Initialize()
     BuildRootSignature();
     BuildLightRootSignature();
     BuildShadersAndInputLayout();
+    BuildGrass();
+    BuildGrassRootSignature();
     BuildPSO();
     BuildDisplayPSO();
     BuildGlowPSO();
@@ -254,6 +323,106 @@ void Meow::OnResize()
 }
 
 
+void Meow::BuildOctreeDebugVisualization()
+{
+    mOctreeDebugRitems.clear();
+
+    if (!mSceneOctree)
+    {
+        return;
+    }
+
+    if (!mOctreeDebugGeo)
+    {
+        std::vector<Vertex> cubeVertices(8);
+        const float h = 0.5f;
+        const XMFLOAT3 corners[8] =
+        {
+            {-h, -h, -h}, { h, -h, -h}, { h,  h, -h}, {-h,  h, -h},
+            {-h, -h,  h}, { h, -h,  h}, { h,  h,  h}, {-h,  h,  h}
+        };
+
+        for (size_t i = 0; i < cubeVertices.size(); ++i)
+        {
+            cubeVertices[i].Pos = corners[i];
+            cubeVertices[i].Normal = { 0.0f, 1.0f, 0.0f };
+            cubeVertices[i].TexC = { 0.5f, 0.5f };
+            cubeVertices[i].TangentU = { 1.0f, 0.0f, 0.0f };
+        }
+
+        std::vector<std::uint32_t> lineIndices =
+        {
+            0,1, 1,2, 2,3, 3,0,
+            4,5, 5,6, 6,7, 7,4,
+            0,4, 1,5, 2,6, 3,7
+        };
+
+        mOctreeDebugGeo = std::make_unique<MeshGeometry>();
+        mOctreeDebugGeo->Name = "OctreeDebugLines";
+
+        const UINT vbByteSize = static_cast<UINT>(cubeVertices.size() * sizeof(Vertex));
+        const UINT ibByteSize = static_cast<UINT>(lineIndices.size() * sizeof(std::uint32_t));
+        mOctreeDebugGeo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(), mCommandList.Get(), cubeVertices.data(), vbByteSize, mOctreeDebugGeo->VertexBufferUploader);
+        mOctreeDebugGeo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(), mCommandList.Get(), lineIndices.data(), ibByteSize, mOctreeDebugGeo->IndexBufferUploader);
+        mOctreeDebugGeo->VertexByteStride = sizeof(Vertex);
+        mOctreeDebugGeo->VertexBufferByteSize = vbByteSize;
+        mOctreeDebugGeo->IndexFormat = DXGI_FORMAT_R32_UINT;
+        mOctreeDebugGeo->IndexBufferByteSize = ibByteSize;
+    }
+
+    Material* debugMat = nullptr;
+    auto matIt = mMaterials.find("OctreeDebug");
+    if (matIt == mMaterials.end())
+    {
+        auto debugMatOwner = std::make_unique<Material>();
+        debugMatOwner->name = "OctreeDebug";
+        debugMatOwner->matCBIndex = static_cast<UINT>(mMaterials.size());
+        debugMatOwner->DiffuseSrvHeapIndex = 0;
+        debugMatOwner->NormalSrvHeapIndex = 0;
+        debugMatOwner->HeightSrvHeapIndex = 0;
+        debugMatOwner->diffuseAlbedo = { 0.2f, 3.0f, 0.45f, 1.0f };
+        debugMatOwner->fresnelRO = { 0.0f, 0.0f, 0.0f };
+        debugMatOwner->roughness = 0.0f;
+        debugMat = debugMatOwner.get();
+        mMaterials[debugMatOwner->name] = std::move(debugMatOwner);
+    }
+    else
+    {
+        debugMat = matIt->second.get();
+    }
+
+    std::function<void(const OctreeNode*, int)> appendNodes = [&](const OctreeNode* node, int depth)
+        {
+            if (!node || depth > mOctreeDebugMaxDepth)
+            {
+                return;
+            }
+
+            auto debugRitem = std::make_unique<RenderItem>();
+            const XMFLOAT3& c = node->Bounds.Center;
+            const XMFLOAT3& e = node->Bounds.Extents;
+            XMStoreFloat4x4(&debugRitem->World,
+                XMMatrixScaling(e.x * 2.0f, e.y * 2.0f, e.z * 2.0f) * XMMatrixTranslation(c.x, c.y, c.z));
+            debugRitem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
+            debugRitem->Geo = mOctreeDebugGeo.get();
+            debugRitem->Mat = debugMat;
+            debugRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_LINELIST;
+            debugRitem->IndexCount = 24;
+            debugRitem->StartIndexLocation = 0;
+            debugRitem->BaseVertexLocation = 0;
+            mOctreeDebugRitems.push_back(debugRitem.get());
+            mAllRitems.push_back(std::move(debugRitem));
+
+            for (const auto& child : node->Children)
+            {
+                appendNodes(child.get(), depth + 1);
+            }
+        };
+
+    appendNodes(mSceneOctree.get(), 0);
+}
+
+
 void Meow::Update(const GameTimer& gt)
 {
     float dt = gt.DeltaTime();
@@ -264,7 +433,7 @@ void Meow::Update(const GameTimer& gt)
     float y = sinf(mPitch);
     float z = cosf(mPitch) * sinf(mYaw);
 
-    XMVECTOR forward = XMVectorSet(x, y, z, 0.0f); 
+    XMVECTOR forward = XMVectorSet(x, y, z, 0.0f);
     XMVECTOR worldUp = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
 
     XMVECTOR right = XMVector3Cross(worldUp, forward);
@@ -312,10 +481,11 @@ void Meow::Update(const GameTimer& gt)
     UpdateBullets(dt);
     UpdateBulletLights();
 
-  
+
     UpdateObjectCBs(gt);
     UpdateMaterialCBs(gt);
     UpdatePassCB(gt);
+    UpdateCulling();
 }
 void Meow::UpdateObjectCBs(const GameTimer& gt) {
     XMMATRIX view = XMLoadFloat4x4(&mView);
@@ -327,11 +497,290 @@ void Meow::UpdateObjectCBs(const GameTimer& gt) {
 
         ObjectConstants objConst;
         XMStoreFloat4x4(&objConst.WorldViewProj, XMMatrixTranspose(worldViewProj));
-        XMStoreFloat4x4(&objConst.World, XMMatrixTranspose(world)); 
+        XMStoreFloat4x4(&objConst.World, XMMatrixTranspose(world));
 
         mObjectCB->CopyData(e->ObjCBIndex, objConst);
     }
 }
+
+
+
+BoundingBox Meow::ComputeItemWorldBounds(const RenderItem& item) const
+{
+    BoundingBox worldBounds;
+
+    item.LocalBounds.Transform(
+        worldBounds,
+        XMLoadFloat4x4(&item.World)
+    );
+
+    return worldBounds;
+}
+
+bool Meow::IntersectsFrustum(const BoundingFrustum& frustum, const BoundingBox& bounds)
+{
+    return frustum.Contains(bounds) != DirectX::DISJOINT;
+}
+
+std::array<BoundingBox, 8> Meow::SplitBounds(const BoundingBox& parentBounds)
+{
+    std::array<BoundingBox, 8> result;
+    const XMFLOAT3& c = parentBounds.Center;
+    const XMFLOAT3& e = parentBounds.Extents;
+    const XMFLOAT3 childExtents = { e.x * 0.5f, e.y * 0.5f, e.z * 0.5f };
+
+    int childIndex = 0;
+    for (int z = 0; z < 2; ++z)
+    {
+        for (int y = 0; y < 2; ++y)
+        {
+            for (int x = 0; x < 2; ++x)
+            {
+                const float sx = x == 0 ? -1.0f : 1.0f;
+                const float sy = y == 0 ? -1.0f : 1.0f;
+                const float sz = z == 0 ? -1.0f : 1.0f;
+
+                result[childIndex].Center =
+                {
+                    c.x + sx * childExtents.x,
+                    c.y + sy * childExtents.y,
+                    c.z + sz * childExtents.z
+                };
+                result[childIndex].Extents = childExtents;
+                ++childIndex;
+            }
+        }
+    }
+
+    return result;
+}
+
+BoundingBox Meow::ComputeEnclosingBounds(const std::vector<OctreeItem>& items)
+{
+    XMFLOAT3 minP = {
+        std::numeric_limits<float>::max(),
+        std::numeric_limits<float>::max(),
+        std::numeric_limits<float>::max()
+    };
+    XMFLOAT3 maxP = {
+        -std::numeric_limits<float>::max(),
+        -std::numeric_limits<float>::max(),
+        -std::numeric_limits<float>::max()
+    };
+
+    for (const OctreeItem& item : items)
+    {
+        const XMFLOAT3& c = item.Bounds.Center;
+        const XMFLOAT3& e = item.Bounds.Extents;
+
+        minP.x = std::min(minP.x, c.x - e.x);
+        minP.y = std::min(minP.y, c.y - e.y);
+        minP.z = std::min(minP.z, c.z - e.z);
+
+        maxP.x = std::max(maxP.x, c.x + e.x);
+        maxP.y = std::max(maxP.y, c.y + e.y);
+        maxP.z = std::max(maxP.z, c.z + e.z);
+    }
+
+    BoundingBox root;
+    root.Center = { (minP.x + maxP.x) * 0.5f, (minP.y + maxP.y) * 0.5f, (minP.z + maxP.z) * 0.5f };
+    root.Extents = { (maxP.x - minP.x) * 0.5f, (maxP.y - minP.y) * 0.5f, (maxP.z - minP.z) * 0.5f };
+    return root;
+}
+
+std::unique_ptr<OctreeNode> Meow::BuildOctreeNode(const std::vector<OctreeItem>& items, const BoundingBox& bounds, int depth)
+{
+    static constexpr int kMaxDepth = 6;
+    static constexpr int kLeafItemThreshold = 32;
+
+    auto node = std::make_unique<OctreeNode>();
+    node->Bounds = bounds;
+
+    if (items.size() <= static_cast<size_t>(kLeafItemThreshold) || depth >= kMaxDepth)
+    {
+        node->Items = items;
+        return node;
+    }
+
+    const auto childBounds = SplitBounds(bounds);
+    std::array<std::vector<OctreeItem>, 8> childBuckets;
+
+    for (const OctreeItem& item : items)
+    {
+        bool pushedToChild = false;
+
+        for (int i = 0; i < 8; ++i)
+        {
+            if (childBounds[i].Contains(item.Bounds) == DirectX::CONTAINS)
+            {
+                childBuckets[i].push_back(item);
+                pushedToChild = true;
+                break;
+            }
+        }
+
+        if (!pushedToChild)
+        {
+            node->Items.push_back(item);
+        }
+    }
+
+    bool hasChildren = false;
+    for (int i = 0; i < 8; ++i)
+    {
+        if (!childBuckets[i].empty())
+        {
+            node->Children[i] = BuildOctreeNode(childBuckets[i], childBounds[i], depth + 1);
+            hasChildren = true;
+        }
+    }
+
+    node->IsLeaf = !hasChildren;
+    return node;
+}
+
+void Meow::BuildSceneOctree()
+{
+    mStaticOctreeItems.clear();
+    mStaticOctreeItems.reserve(mOpaqueRitems.size() + mCurtainRitems.size() + mWaterRitems.size());
+
+    auto addBucket = [this](const std::vector<RenderItem*>& src, RenderBucket bucket)
+        {
+            for (RenderItem* item : src)
+            {
+                item->WorldBounds = ComputeItemWorldBounds(*item);
+                mStaticOctreeItems.push_back({ item, bucket, item->WorldBounds });
+            }
+        };
+
+    addBucket(mOpaqueRitems, RenderBucket::Opaque);
+    addBucket(mCurtainRitems, RenderBucket::Curtain);
+    addBucket(mWaterRitems, RenderBucket::Water);
+
+    if (mStaticOctreeItems.empty())
+    {
+        mSceneOctree.reset();
+        return;
+    }
+
+    const BoundingBox rootBounds = ComputeEnclosingBounds(mStaticOctreeItems);
+    mSceneOctree = BuildOctreeNode(mStaticOctreeItems, rootBounds, 0);
+}
+
+void Meow::AppendSubtreeItems(const OctreeNode* node)
+{
+    if (node == nullptr)
+    {
+        return;
+    }
+
+    for (const OctreeItem& item : node->Items)
+    {
+        switch (item.Bucket)
+        {
+        case RenderBucket::Opaque:
+            mVisibleOpaqueRitems.push_back(item.Item);
+            break;
+        case RenderBucket::Curtain:
+            mVisibleCurtainRitems.push_back(item.Item);
+            break;
+        case RenderBucket::Water:
+            mVisibleWaterRitems.push_back(item.Item);
+            break;
+        }
+    }
+
+    for (const auto& child : node->Children)
+    {
+        AppendSubtreeItems(child.get());
+    }
+}
+
+void Meow::QueryOctreeVisible(const OctreeNode* node, const BoundingFrustum& frustum)
+{
+    if (node == nullptr)
+    {
+        return;
+    }
+
+    const auto nodeContainment = frustum.Contains(node->Bounds);
+    if (nodeContainment == DirectX::DISJOINT)
+    {
+        return;
+    }
+
+    if (nodeContainment == DirectX::CONTAINS)
+    {
+        AppendSubtreeItems(node);
+        return;
+    }
+
+    for (const OctreeItem& item : node->Items)
+    {
+        if (IntersectsFrustum(frustum, item.Bounds))
+        {
+            switch (item.Bucket)
+            {
+            case RenderBucket::Opaque:
+                mVisibleOpaqueRitems.push_back(item.Item);
+                break;
+            case RenderBucket::Curtain:
+                mVisibleCurtainRitems.push_back(item.Item);
+                break;
+            case RenderBucket::Water:
+                mVisibleWaterRitems.push_back(item.Item);
+                break;
+            }
+        }
+    }
+
+    for (const auto& child : node->Children)
+    {
+        QueryOctreeVisible(child.get(), frustum);
+    }
+}
+
+void Meow::UpdateCulling()
+{
+    mVisibleOpaqueRitems.clear();
+    mVisibleCurtainRitems.clear();
+    mVisibleWaterRitems.clear();
+    mVisibleOpaqueRitems.reserve(mOpaqueRitems.size());
+    mVisibleCurtainRitems.reserve(mCurtainRitems.size());
+    mVisibleWaterRitems.reserve(mWaterRitems.size());
+    if (!mSceneOctree)
+    {
+        mVisibleOpaqueRitems = mOpaqueRitems;
+        mVisibleCurtainRitems = mCurtainRitems;
+        mVisibleWaterRitems = mWaterRitems;
+        return;
+    }
+
+    BoundingFrustum viewFrustum;
+    BoundingFrustum::CreateFromMatrix(viewFrustum, XMLoadFloat4x4(&mProj));
+
+    XMMATRIX invView = XMMatrixInverse(nullptr, XMLoadFloat4x4(&mView));
+    BoundingFrustum worldFrustum;
+    viewFrustum.Transform(worldFrustum, invView);
+
+
+    QueryOctreeVisible(mSceneOctree.get(), worldFrustum);
+
+    mVisibleGrassCount = 0;
+    for (const auto& inst : mAllGrassInstances)
+    {
+
+        DirectX::BoundingSphere sphere(inst.Position, inst.Scale);
+
+        if (worldFrustum.Contains(sphere) != DirectX::DISJOINT)
+        {
+            mGrassInstanceBuffer->CopyData(mVisibleGrassCount, inst);
+            mVisibleGrassCount++;
+        }
+    }
+}
+
+
 
 void Meow::Draw(const GameTimer& gt)
 {
@@ -373,7 +822,7 @@ void Meow::Draw(const GameTimer& gt)
     UINT srvSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
 
-    for (auto ri : mOpaqueRitems) {
+    for (auto ri : mVisibleOpaqueRitems) {
         auto vbv = ri->Geo->VertexBufferView();
         auto ibv = ri->Geo->IndexBufferView();
         mCommandList->IASetVertexBuffers(0, 1, &vbv);
@@ -392,28 +841,11 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
     }
 
+    mCommandList->SetGraphicsRootShaderResourceView(0, mGrassInstanceBuffer->Resource()->GetGPUVirtualAddress());
+    mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
+
     mCommandList->SetPipelineState(mCurtainPSO.Get());
-    for (auto ri : mCurtainRitems) {
-        auto vbv = ri->Geo->VertexBufferView();
-        auto ibv = ri->Geo->IndexBufferView();
-        mCommandList->IASetVertexBuffers(0, 1, &vbv);
-        mCommandList->IASetIndexBuffer(&ibv);
-       // mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST/*ri->PrimitiveType*/);
-
-        mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
-        CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
-        int texIdx = (ri->Mat->DiffuseSrvHeapIndex >= 0) ? ri->Mat->DiffuseSrvHeapIndex : 0;
-        texHandle.Offset(texIdx, srvSize);
-
-        mCommandList->SetGraphicsRootDescriptorTable(0, texHandle);
-        mCommandList->SetGraphicsRootConstantBufferView(1, mObjectCB->Resource()->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBByteSize);
-        mCommandList->SetGraphicsRootConstantBufferView(3, mMaterialCB->Resource()->GetGPUVirtualAddress() + ri->Mat->matCBIndex * matCBByteSize);
-
-        mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
-    }
-
-    mCommandList->SetPipelineState(mWaterPSO.Get());
-    for (auto ri : mWaterRitems) {
+    for (auto ri : mVisibleCurtainRitems) {
         auto vbv = ri->Geo->VertexBufferView();
         auto ibv = ri->Geo->IndexBufferView();
         mCommandList->IASetVertexBuffers(0, 1, &vbv);
@@ -432,8 +864,38 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
     }
 
+    mCommandList->SetPipelineState(mWaterPSO.Get());
+    for (auto ri : mVisibleWaterRitems) {
+        auto vbv = ri->Geo->VertexBufferView();
+        auto ibv = ri->Geo->IndexBufferView();
+        mCommandList->IASetVertexBuffers(0, 1, &vbv);
+        mCommandList->IASetIndexBuffer(&ibv);
+        // mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST/*ri->PrimitiveType*/);
+
+        mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+        CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+        int texIdx = (ri->Mat->DiffuseSrvHeapIndex >= 0) ? ri->Mat->DiffuseSrvHeapIndex : 0;
+        texHandle.Offset(texIdx, srvSize);
+
+        mCommandList->SetGraphicsRootDescriptorTable(0, texHandle);
+        mCommandList->SetGraphicsRootConstantBufferView(1, mObjectCB->Resource()->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBByteSize);
+        mCommandList->SetGraphicsRootConstantBufferView(3, mMaterialCB->Resource()->GetGPUVirtualAddress() + ri->Mat->matCBIndex * matCBByteSize);
+
+        mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
+    }
+
+    if (mVisibleGrassCount > 0)
+    {
+        mCommandList->SetGraphicsRootSignature(mGrassRootSignature.Get());
+        mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
+        mCommandList->SetPipelineState(mGrassPSO.Get());
+        mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        mCommandList->SetGraphicsRootShaderResourceView(0, mGrassInstanceBuffer->Resource()->GetGPUVirtualAddress());
+        mCommandList->DrawInstanced(4, mVisibleGrassCount, 0, 0);
+    }
+
     mgBuffer->TransitToLightRenderingState(mCommandList);
-    
+
     auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
         mgBuffer->Pos.Get(),
         D3D12_RESOURCE_STATE_RENDER_TARGET,
@@ -458,7 +920,7 @@ void Meow::Draw(const GameTimer& gt)
 
 
 
-    mCommandList->IASetVertexBuffers(0, 0, nullptr); 
+    mCommandList->IASetVertexBuffers(0, 0, nullptr);
     mCommandList->IASetIndexBuffer(nullptr);
     mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     mCommandList->DrawInstanced(3, 1, 0, 0);
@@ -495,6 +957,25 @@ void Meow::Draw(const GameTimer& gt)
 
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
     }
+    if (mShowOctreeDebug && !mOctreeDebugRitems.empty())
+    {
+        mCommandList->SetPipelineState(mOctreeDebugPSO.Get());
+        for (RenderItem* ri : mOctreeDebugRitems)
+        {
+            auto vbv = ri->Geo->VertexBufferView();
+            auto ibv = ri->Geo->IndexBufferView();
+            mCommandList->IASetVertexBuffers(0, 1, &vbv);
+            mCommandList->IASetIndexBuffer(&ibv);
+            mCommandList->IASetPrimitiveTopology(ri->PrimitiveType);
+
+            CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+            mCommandList->SetGraphicsRootDescriptorTable(0, texHandle);
+            mCommandList->SetGraphicsRootConstantBufferView(1, mObjectCB->Resource()->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBByteSize);
+            mCommandList->SetGraphicsRootConstantBufferView(3, mMaterialCB->Resource()->GetGPUVirtualAddress() + ri->Mat->matCBIndex * matCBByteSize);
+
+            mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
+        }
+    }
 
     auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     mCommandList->ResourceBarrier(1, &barrier2);
@@ -516,7 +997,7 @@ void Meow::AnimateMaterials(const GameTimer& gt)
     if (angle >= XM_2PI) angle -= XM_2PI;
 
     auto seaMat = mMaterials["Model"].get();
-    XMMATRIX S = XMMatrixScaling(12.0f, 12.0f, 1.0f); 
+    XMMATRIX S = XMMatrixScaling(12.0f, 12.0f, 1.0f);
     XMMATRIX T1 = XMMatrixTranslation(-0.5f, -0.5f, 0.0f);
     XMMATRIX R = XMMatrixRotationZ(angle);
     XMMATRIX T2 = XMMatrixTranslation(0.5f, 0.5f, 0.0f);
@@ -537,8 +1018,8 @@ void Meow::OnMouseMove(WPARAM btnState, int x, int y) {
         float dx = XMConvertToRadians(mousSen * static_cast<float>(x - mLastMousePos.x));
         float dy = XMConvertToRadians(mousSen * static_cast<float>(y - mLastMousePos.y));
 
-        mYaw += dx;   
-        mPitch -= dy; 
+        mYaw += dx;
+        mPitch -= dy;
 
         mPitch = MathHelper::Clamp(mPitch, -XM_PIDIV2 + 0.1f, XM_PIDIV2 - 0.1f);
     }
@@ -600,12 +1081,12 @@ void Meow::BuildLightRootSignature()
     auto staticSamplers = GetStaticSamplers();
 
     CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(2, slotRootParameter,
-            (UINT)staticSamplers.size(), staticSamplers.data(),
-            D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+        (UINT)staticSamplers.size(), staticSamplers.data(),
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
     ComPtr<ID3DBlob> serializedRootSig = nullptr;
     ComPtr<ID3DBlob> errorBlob = nullptr;
-   
+
     HRESULT hr = D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serializedRootSig, &errorBlob);
     if (errorBlob != nullptr)
     {
@@ -620,7 +1101,7 @@ void Meow::BuildLightRootSignature()
 void Meow::BuildDescriptorHeaps()
 {
     UINT numDescriptors = static_cast<UINT>(mMaterials.size()) * 3;
-    if (numDescriptors == 0) numDescriptors = 1; 
+    if (numDescriptors == 0) numDescriptors = 1;
 
     D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
     srvHeapDesc.NumDescriptors = numDescriptors;
@@ -640,15 +1121,12 @@ void Meow::BuildDescriptorHeaps()
         auto createSrvAtIndex = [&](const std::string& texName, int descriptorIndex) {
             auto texIt = mTextures.find(texName);
 
-            // Сразу вычисляем позицию дескриптора
             CD3DX12_CPU_DESCRIPTOR_HANDLE dst(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
             dst.Offset(descriptorIndex, srvSize);
 
-            // Если текстура не найдена, ищем дефолтную
             if (texIt == mTextures.end() || !texIt->second || !texIt->second->resource) {
                 texIt = mTextures.find("background.dds");
 
-                // Если даже дефолтной НЕТ, создаем безопасный Null-дескриптор!
                 if (texIt == mTextures.end() || !texIt->second || !texIt->second->resource) {
                     D3D12_SHADER_RESOURCE_VIEW_DESC nullSrvDesc = {};
                     nullSrvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -658,13 +1136,11 @@ void Meow::BuildDescriptorHeaps()
                     nullSrvDesc.Texture2D.MipLevels = 1;
                     nullSrvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
 
-                    // Передаем nullptr вместо ресурса
                     md3dDevice->CreateShaderResourceView(nullptr, &nullSrvDesc, dst);
                     return;
                 }
             }
 
-            // Если текстура найдена - создаем нормальный SRV
             auto resource = texIt->second->resource;
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
             srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -710,7 +1186,7 @@ void Meow::BuildMaterials() {
 }
 
 void Meow::UpdateMaterialCBs(const GameTimer& gt) {
-    
+
     for (auto& e : mMaterials) {
         Material* mat = e.second.get();
 
@@ -777,15 +1253,15 @@ void Meow::BuildDeferredLights()
 
     for (UINT i = 0; i < kPointLights; ++i)
     {
-        const float x =  (i % 60) * 16.0f;
-        const float z =  (i / 60) * 12.0f;
+        const float x = (i % 60) * 16.0f;
+        const float z = (i / 60) * 12.0f;
         AddPointDeferredLight(XMFLOAT3(x, 8.0f, z), XMFLOAT3(0.01f, 0.08f, 0.06f), 20.0f, 100.0f);
     }
 
     XMVECTOR spotDir = XMVector3Normalize(XMVectorSet(0.7f, -1.0f, -0.7f, 0.0f));
     XMFLOAT3 spotDirNorm;
     XMStoreFloat3(&spotDirNorm, spotDir);
-    AddSpotDeferredLight(XMFLOAT3(0.0f, 100.0f, 10.0f), spotDirNorm, XMFLOAT3(10.8f, 10.5f, 111.0f), 500.0f, 10000.0f,  200.0f);
+    AddSpotDeferredLight(XMFLOAT3(0.0f, 100.0f, 10.0f), spotDirNorm, XMFLOAT3(10.8f, 10.5f, 111.0f), 500.0f, 10000.0f, 200.0f);
 
     mStaticLights = mDeferredLights;
     mStaticDirLights = mNumDirLights;
@@ -827,7 +1303,7 @@ void Meow::UpdatePassCB(const GameTimer& gt)
     mMainPassCB.DeltaTime = gt.DeltaTime();
     mMainPassCB.AmbientLight = { 0.25f, 0.25f, 0.35f, 1.0f };
 
-   // XMVECTOR lightDir = -MathHelper::SphericalToCartesian(1.0f, mSunTheta, mSunPhi);
+    // XMVECTOR lightDir = -MathHelper::SphericalToCartesian(1.0f, mSunTheta, mSunPhi);
 
     mMainPassCB.NumDirLights = mNumDirLights;
     mMainPassCB.NumPointLights = mNumPointLights;
@@ -854,7 +1330,7 @@ void Meow::BuildShadersAndInputLayout()
     std::wstring glowShaderPath = L"glow.hlsl";
 
     try {
- 
+
         mvsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "VS", "vs_5_0");
         mpsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "PS", "ps_5_0");
         mhsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "HS", "hs_5_0");
@@ -862,7 +1338,7 @@ void Meow::BuildShadersAndInputLayout()
 
         mvsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "VS", "vs_5_0");
         mpsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "PS", "ps_5_0");
-       
+
         mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
         mhsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "HS", "hs_5_0");
 
@@ -873,6 +1349,9 @@ void Meow::BuildShadersAndInputLayout()
 
         mvsGlowByteCode = d3dUtil::CompileShader(glowShaderPath, nullptr, "VS", "vs_5_0");
         mpsGlowByteCode = d3dUtil::CompileShader(glowShaderPath, nullptr, "PS", "ps_5_0");
+
+        mvsGrassByteCode = d3dUtil::CompileShader(L"grass.hlsl", nullptr, "VS", "vs_5_0");
+        mpsGrassByteCode = d3dUtil::CompileShader(L"grass.hlsl", nullptr, "PS", "ps_5_0");
     }
 
     catch (const std::exception& e) {
@@ -886,6 +1365,7 @@ void Meow::BuildShadersAndInputLayout()
         {"TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0}
     };
 }
+
 void Meow::LoadModelAndTextures()
 {
 
@@ -958,13 +1438,13 @@ void Meow::LoadModelAndTextures()
         mat->HeightSrvHeapIndex = srvHeapIndex + 2;
         srvHeapIndex += 3;
         std::string diffuseTexName = defaultDiffuseTexName;
-      
+
         if (aiMat->GetTextureCount(aiTextureType_DIFFUSE) > 0) {
             aiString texPath;
             aiMat->GetTexture(aiTextureType_DIFFUSE, 0, &texPath);
             /*std::string texNameStr = texPath.C_Str();
 
-           
+
             size_t lastDot = texNameStr.find_last_of(".");
             if (lastDot != std::string::npos) texNameStr = texNameStr.substr(0, lastDot) + ".dds";
 
@@ -973,7 +1453,7 @@ void Meow::LoadModelAndTextures()
                 std::string fullPath = baseDirSponza + texNameStr;
                 std::wstring wfullPath(fullPath.begin(), fullPath.end());
 
-    
+
                 HRESULT hr = DirectX::CreateDDSTextureFromFile12(md3dDevice.Get(), mCommandList.Get(),
                     wfullPath.c_str(), tex->resource, tex->uploadHeap);
 
@@ -985,7 +1465,7 @@ void Meow::LoadModelAndTextures()
                 }
             }
             else {
-           
+
                 for (int idx = 0; idx < mTextureOrder.size(); ++idx) {
                     if (mTextureOrder[idx] == texNameStr) {
                         mat->DiffuseSrvHeapIndex = idx;
@@ -1005,25 +1485,22 @@ void Meow::LoadModelAndTextures()
         aiString normalTexPath;
         if (aiMat->GetTexture(aiTextureType_HEIGHT, 0, &normalTexPath) == AI_SUCCESS) {
             normalTexName = normalTexPath.C_Str();
-            OutputDebugStringA("Найдено в HEIGHT\n");
+
         }
         else if (aiMat->GetTexture(static_cast<aiTextureType>(8), 0, &normalTexPath) == AI_SUCCESS) {
             normalTexName = normalTexPath.C_Str();
-            std::string msg = "Найдено в ТИПЕ 8 для: " + name + " -> " + normalTexName + "\n";
-            OutputDebugStringA(msg.c_str());
+
         }
         else if (aiMat->GetTexture(aiTextureType_DISPLACEMENT, 0, &normalTexPath) == AI_SUCCESS) {
             normalTexName = normalTexPath.C_Str();
-            OutputDebugStringA("Найдено\n");
+
         }
         else if (aiMat->GetTexture(aiTextureType_NORMALS, 0, &normalTexPath) == AI_SUCCESS) {
             normalTexName = normalTexPath.C_Str();
-           // MessageBoxA(nullptr, "Найдено в NORMALS\n", "DEBUG", MB_OK);
-            //OutputDebugStringA("Найдено в NORMALS\n");
         }
         else if (aiMat->GetTexture(aiTextureType_UNKNOWN, 0, &normalTexPath) == AI_SUCCESS) {
             normalTexName = normalTexPath.C_Str();
-            OutputDebugStringA("Найдено в UNKNOWN!\n");
+
         }
         else {
             normalTexName = defaultNormalTexName;
@@ -1047,6 +1524,14 @@ void Meow::LoadModelAndTextures()
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
 
+    const std::array<XMFLOAT3, 5> sponzaInstanceOffsets = {
+        XMFLOAT3{ 20.0f, 5.0f, -10.0f },
+        XMFLOAT3{ -170.0f, 5.0f, -10.0f },
+        XMFLOAT3{ 210.0f, 5.0f, -10.0f },
+        XMFLOAT3{ 20.0f, 5.0f, -190.0f },
+        XMFLOAT3{ 20.0f, 5.0f, 170.0f }
+    };
+
     for (unsigned int m = 0; m < sponza->mNumMeshes; ++m) {
         aiMesh* mesh = sponza->mMeshes[m];
 
@@ -1054,6 +1539,9 @@ void Meow::LoadModelAndTextures()
         subMesh.BaseVertexLocation = (UINT)vertices.size();
         subMesh.StartIndexLocation = (UINT)indices.size();
         subMesh.IndexCount = mesh->mNumFaces * 3;
+
+        XMFLOAT3 minPos = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
+        XMFLOAT3 maxPos = { -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() };
 
         for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
             Vertex v;
@@ -1065,7 +1553,13 @@ void Meow::LoadModelAndTextures()
             }
             else {
                 v.TangentU = { 1.0f, 0.0f, 0.0f };
-            } 
+            }
+            minPos.x = std::min(minPos.x, v.Pos.x);
+            minPos.y = std::min(minPos.y, v.Pos.y);
+            minPos.z = std::min(minPos.z, v.Pos.z);
+            maxPos.x = std::max(maxPos.x, v.Pos.x);
+            maxPos.y = std::max(maxPos.y, v.Pos.y);
+            maxPos.z = std::max(maxPos.z, v.Pos.z);
             vertices.push_back(v);
         }
 
@@ -1075,7 +1569,7 @@ void Meow::LoadModelAndTextures()
             indices.push_back(mesh->mFaces[i].mIndices[2]);
         }
 
-        auto ritem = std::make_unique<RenderItem>();
+       /* auto ritem = std::make_unique<RenderItem>();
         ritem->World = MathHelper::Identity4x4();
         XMStoreFloat4x4(&ritem->World, XMMatrixScaling(0.1f, 0.1f, 0.1f));
         ritem->ObjCBIndex = m;
@@ -1083,17 +1577,57 @@ void Meow::LoadModelAndTextures()
         ritem->IndexCount = subMesh.IndexCount;
         ritem->StartIndexLocation = subMesh.StartIndexLocation;
         ritem->BaseVertexLocation = subMesh.BaseVertexLocation;
+        ritem->LocalBounds.Center = {
+            (minPos.x + maxPos.x) * 0.5f,
+            (minPos.y + maxPos.y) * 0.5f,
+            (minPos.z + maxPos.z) * 0.5f
+        };
+        ritem->LocalBounds.Extents = {
+            (maxPos.x - minPos.x) * 0.5f,
+            (maxPos.y - minPos.y) * 0.5f,
+            (maxPos.z - minPos.z) * 0.5f
+        };*/
 
         aiMaterial* aiMat = sponza->mMaterials[mesh->mMaterialIndex];
         aiString mName; aiMat->Get(AI_MATKEY_NAME, mName);
         std::string uniqueName = mName.C_Str() + std::string("_") + std::to_string(mesh->mMaterialIndex);
-        ritem->Mat = mMaterials[uniqueName].get();
+        /*ritem->Mat = mMaterials[uniqueName].get();
         if (ritem->Mat == nullptr) {
-            std::string errorMsg = "Material not found for ывавыппявыа: " + uniqueName;
+            std::string errorMsg = "Material not found for: " + uniqueName;
             MessageBoxA(nullptr, errorMsg.c_str(), "Error", MB_OK);
             __debugbreak();
         }
-        mAllRitems.push_back(std::move(ritem));
+        mAllRitems.push_back(std::move(ritem));*/
+
+        for (const XMFLOAT3& instanceOffset : sponzaInstanceOffsets)
+        {
+            auto ritem = std::make_unique<RenderItem>();
+            XMMATRIX scale = XMMatrixScaling(0.1f, 0.1f, 0.1f);
+            XMMATRIX offset = XMMatrixTranslation(instanceOffset.x, instanceOffset.y, instanceOffset.z);
+            XMStoreFloat4x4(&ritem->World, scale * offset);
+            ritem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
+            ritem->Geo = mModelSponza.get();
+            ritem->IndexCount = subMesh.IndexCount;
+            ritem->StartIndexLocation = subMesh.StartIndexLocation;
+            ritem->BaseVertexLocation = subMesh.BaseVertexLocation;
+            ritem->LocalBounds.Center = {
+                (minPos.x + maxPos.x) * 0.5f,
+                (minPos.y + maxPos.y) * 0.5f,
+                (minPos.z + maxPos.z) * 0.5f
+            };
+            ritem->LocalBounds.Extents = {
+                (maxPos.x - minPos.x) * 0.5f,
+                (maxPos.y - minPos.y) * 0.5f,
+                (maxPos.z - minPos.z) * 0.5f
+            };
+            ritem->Mat = mMaterials[uniqueName].get();
+            if (ritem->Mat == nullptr) {
+                std::string errorMsg = "Material not found for Г»ГўГ ГўГ»ГЇГЇГїГўГ»Г : " + uniqueName;
+                MessageBoxA(nullptr, errorMsg.c_str(), "Error", MB_OK);
+                __debugbreak();
+            }
+            mAllRitems.push_back(std::move(ritem));
+        }
     }
 
     Assimp::Importer stoneImporter;
@@ -1108,7 +1642,7 @@ void Meow::LoadModelAndTextures()
     if (!oldStone || !oldStone->mRootNode) {
         std::string error = stoneImporter.GetErrorString();
         MessageBoxA(nullptr, error.c_str(), "Assimp Error", MB_OK);
-        return; 
+        return;
     }
 
     if (oldStone && oldStone->mRootNode) {
@@ -1143,7 +1677,7 @@ void Meow::LoadModelAndTextures()
 
             loadTextureIfNeeded(baseDirSponza, fallback);
             return fallback;
-        };
+            };
 
         for (unsigned int i = 0; i < oldStone->mNumMaterials; ++i) {
 
@@ -1176,6 +1710,14 @@ void Meow::LoadModelAndTextures()
             mMaterials[name] = std::move(mat);
         }
 
+        const std::array<XMFLOAT3, 5> sponzaInstanceOffsets = {
+            XMFLOAT3{ 200.0f, 115.0f, -100.0f },
+            XMFLOAT3{ -170.0f, 500.0f, -100.0f },
+            XMFLOAT3{ 210.0f, 250.0f, -100.0f },
+            XMFLOAT3{ 20.0f, 50.0f, -190.0f },
+            XMFLOAT3{ 20.0f, 50.0f, 170.0f }
+        };
+
         for (unsigned int m = 0; m < oldStone->mNumMeshes; ++m) {
             aiMesh* mesh = oldStone->mMeshes[m];
 
@@ -1183,6 +1725,9 @@ void Meow::LoadModelAndTextures()
             subMesh.BaseVertexLocation = (UINT)vertices.size();
             subMesh.StartIndexLocation = (UINT)indices.size();
             subMesh.IndexCount = mesh->mNumFaces * 3;
+
+            XMFLOAT3 minPos = { std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max() };
+            XMFLOAT3 maxPos = { -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max() };
 
             for (unsigned int i = 0; i < mesh->mNumVertices; ++i) {
                 Vertex v;
@@ -1195,6 +1740,12 @@ void Meow::LoadModelAndTextures()
                 else {
                     v.TangentU = { 1.0f, 0.0f, 0.0f };
                 }
+                minPos.x = std::min(minPos.x, v.Pos.x);
+                minPos.y = std::min(minPos.y, v.Pos.y);
+                minPos.z = std::min(minPos.z, v.Pos.z);
+                maxPos.x = std::max(maxPos.x, v.Pos.x);
+                maxPos.y = std::max(maxPos.y, v.Pos.y);
+                maxPos.z = std::max(maxPos.z, v.Pos.z);
                 vertices.push_back(v);
             }
 
@@ -1204,28 +1755,42 @@ void Meow::LoadModelAndTextures()
                 indices.push_back(mesh->mFaces[i].mIndices[2]);
             }
 
-            auto ritem = std::make_unique<RenderItem>();
             XMMATRIX scale = XMMatrixScaling(10.5f, 10.5f, 10.5f);
             XMMATRIX rot = XMMatrixRotationRollPitchYaw(XMConvertToRadians(-90.0f), XMConvertToRadians(90.0f), XMConvertToRadians(0.0f));
-            XMMATRIX offset = XMMatrixTranslation(20.0f, 5.0f, -10.0f);
-
-            XMStoreFloat4x4(&ritem->World, scale * rot * offset);
-            ritem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
-            ritem->Geo = mModelSponza.get();
-            ritem->IndexCount = subMesh.IndexCount;
-            ritem->StartIndexLocation = subMesh.StartIndexLocation;
-            ritem->BaseVertexLocation = subMesh.BaseVertexLocation;
 
             aiMaterial* aiMat = oldStone->mMaterials[mesh->mMaterialIndex];
             aiString mName; aiMat->Get(AI_MATKEY_NAME, mName);
             std::string fullName = std::string("old_stone_") + mName.C_Str() + std::string("_") + std::to_string(mesh->mMaterialIndex);
-            ritem->Mat = mMaterials[fullName].get();
-            if (ritem->Mat == nullptr) {
-                std::string errorMsg = "Material not found for Swan: " + fullName;
-                MessageBoxA(nullptr, errorMsg.c_str(), "Error", MB_OK);
-                __debugbreak();
+
+            for (const XMFLOAT3& instanceOffset : sponzaInstanceOffsets)
+            {
+                auto ritem = std::make_unique<RenderItem>();
+                XMMATRIX offset = XMMatrixTranslation(instanceOffset.x, instanceOffset.y, instanceOffset.z);
+                XMStoreFloat4x4(&ritem->World, scale * rot * offset);
+                ritem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
+                ritem->Geo = mModelSponza.get();
+                ritem->IndexCount = subMesh.IndexCount;
+                ritem->StartIndexLocation = subMesh.StartIndexLocation;
+                ritem->BaseVertexLocation = subMesh.BaseVertexLocation;
+                ritem->LocalBounds.Center = {
+                    (minPos.x + maxPos.x) * 0.5f,
+                    (minPos.y + maxPos.y) * 0.5f,
+                    (minPos.z + maxPos.z) * 0.5f
+                };
+                ritem->LocalBounds.Extents = {
+                    (maxPos.x - minPos.x) * 0.5f,
+                    (maxPos.y - minPos.y) * 0.5f,
+                    (maxPos.z - minPos.z) * 0.5f
+                };
+
+                ritem->Mat = mMaterials[fullName].get();
+                if (ritem->Mat == nullptr) {
+                    std::string errorMsg = "Material not found for Swan: " + fullName;
+                    MessageBoxA(nullptr, errorMsg.c_str(), "Error", MB_OK);
+                    __debugbreak();
+                }
+                mAllRitems.push_back(std::move(ritem));
             }
-            mAllRitems.push_back(std::move(ritem));
         }
     }
 
@@ -1247,10 +1812,10 @@ void Meow::LoadModelAndTextures()
     float height = 1.0f;
 
     Vertex v0, v1, v2, v3;
-    v0.Pos = { -width, 0.0f, -height};
-    v1.Pos = { width, 0.0f, -height};
-    v2.Pos = { -width, 0.0f,  height};
-    v3.Pos = { width, 0.0f,  height};
+    v0.Pos = { -width, 0.0f, -height };
+    v1.Pos = { width, 0.0f, -height };
+    v2.Pos = { -width, 0.0f,  height };
+    v3.Pos = { width, 0.0f,  height };
 
     XMFLOAT3 normal = { 0.0f, 1.0f, 0.0f };
     v0.Normal = normal;
@@ -1310,7 +1875,7 @@ void Meow::LoadModelAndTextures()
 
     auto quadRitem = std::make_unique<RenderItem>();
     quadRitem->World = MathHelper::Identity4x4();
-    XMStoreFloat4x4(&quadRitem->World, XMMatrixScaling(100.1f, 1.0f, 100.1f)* XMMatrixTranslation(0.0f, 5.0f, 0.0f));
+    XMStoreFloat4x4(&quadRitem->World, XMMatrixScaling(100.1f, 1.0f, 100.1f) * XMMatrixTranslation(0.0f, 5.0f, 0.0f));
     quadRitem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
     quadRitem->Geo = mQuadGeo.get();
     quadRitem->Mat = mMaterials["Water"].get();
@@ -1318,9 +1883,11 @@ void Meow::LoadModelAndTextures()
     quadRitem->StartIndexLocation = 0;
     quadRitem->BaseVertexLocation = 0;
     quadRitem->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
+    quadRitem->LocalBounds.Center = { 0.0f, 0.0f, 0.0f };
+    quadRitem->LocalBounds.Extents = { width, 0.05f, height };
 
     mAllRitems.push_back(std::move(quadRitem));
-    
+
 
 #pragma region CurtainsAndBullets
 
@@ -1338,6 +1905,9 @@ void Meow::LoadModelAndTextures()
             mOpaqueRitems.push_back(e.get());
         }
     }
+
+    BuildSceneOctree();
+    BuildOctreeDebugVisualization();
 
     auto bulletMat = std::make_unique<Material>();
     bulletMat->name = "BulletGlow";
@@ -1412,6 +1982,43 @@ void Meow::LoadModelAndTextures()
 #pragma endregion
 }
 
+
+void Meow::BuildGrass()
+{
+    mGrassInstanceBuffer = std::make_unique<UploadBuffer<GrassInstanceData>>(md3dDevice.Get(), mGrassInstanceCount, false);
+    mAllGrassInstances.resize(mGrassInstanceCount);
+
+    std::mt19937 randEngine(1337);
+    std::uniform_real_distribution<float> xzDist(-500.0f, 500.0f);
+    std::uniform_real_distribution<float> scaleDist(0.5f, 1.5f);
+
+    for (UINT i = 0; i < mGrassInstanceCount; ++i)
+    {
+        mAllGrassInstances[i].Position = XMFLOAT3(xzDist(randEngine), 0.0f, xzDist(randEngine));
+        mAllGrassInstances[i].Scale = scaleDist(randEngine);
+    }
+}
+
+
+void Meow::BuildGrassRootSignature()
+{
+    CD3DX12_ROOT_PARAMETER slotRootParameter[2];
+    slotRootParameter[0].InitAsShaderResourceView(0);
+
+    slotRootParameter[1].InitAsConstantBufferView(1);
+
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(2, slotRootParameter, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+    ComPtr<ID3DBlob> serializedRootSig = nullptr;
+    ComPtr<ID3DBlob> errorBlob = nullptr;
+    HRESULT hr = D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serializedRootSig, &errorBlob);
+    if (errorBlob != nullptr)
+        ::OutputDebugStringA((char*)errorBlob->GetBufferPointer());
+
+    ThrowIfFailed(hr);
+    ThrowIfFailed(md3dDevice->CreateRootSignature(0, serializedRootSig->GetBufferPointer(), serializedRootSig->GetBufferSize(), IID_PPV_ARGS(&mGrassRootSignature)));
+}
+
 void Meow::InitBulletPool()
 {
     const auto submeshIndexCount = static_cast<UINT>(10 * 10 * 6);
@@ -1426,6 +2033,8 @@ void Meow::InitBulletPool()
         bulletRI->StartIndexLocation = 0;
         bulletRI->BaseVertexLocation = 0;
         bulletRI->PrimitiveType = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        bulletRI->LocalBounds.Center = { 0.0f, 0.0f, 0.0f };
+        bulletRI->LocalBounds.Extents = { kBulletRadius, kBulletRadius, kBulletRadius };
         XMStoreFloat4x4(&bulletRI->World, XMMatrixTranslation(0.0f, -10000.0f, 0.0f));
 
         mBullets[i].RenderProxy = bulletRI.get();
@@ -1507,7 +2116,7 @@ void Meow::UpdateBulletLights()
             bulletLight.Position = bullet.Position;
             bulletLight.Strength = XMFLOAT3(100.0f, 100.5f, 100.0f);
             bulletLight.FalloffStart = 0.9f;
-            bulletLight.FalloffEnd = 20.5f; 
+            bulletLight.FalloffEnd = 20.5f;
             bulletLight.Direction = XMFLOAT3(1.0f, -1.0f, 1.0f);
             bulletLight.SpotPower = 100.0f;
 
@@ -1534,6 +2143,7 @@ void Meow::UpdateBulletLights()
         }
     }
 }
+
 void Meow::BuildPSO() {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.pRootSignature = mRootSignature.Get();
@@ -1544,13 +2154,13 @@ void Meow::BuildPSO() {
     psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
     psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
     psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
-    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE; 
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
     psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
     psoDesc.InputLayout = { mInputLayoutDesc.data(), (UINT)mInputLayoutDesc.size() };
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_PATCH;//D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 3;
-    psoDesc.RTVFormats[0] = mBackBufferFormat;     
-    psoDesc.RTVFormats[1] = DXGI_FORMAT_R32G32B32A32_FLOAT;  
+    psoDesc.RTVFormats[0] = mBackBufferFormat;
+    psoDesc.RTVFormats[1] = DXGI_FORMAT_R32G32B32A32_FLOAT;
     psoDesc.RTVFormats[2] = DXGI_FORMAT_R32_FLOAT;
     psoDesc.DSVFormat = mDepthStencilFormat;
     psoDesc.SampleMask = UINT_MAX;
@@ -1558,6 +2168,16 @@ void Meow::BuildPSO() {
     psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
 
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSO)));
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC grassPsoDesc = psoDesc;
+    grassPsoDesc.pRootSignature = mGrassRootSignature.Get();
+    grassPsoDesc.VS = { reinterpret_cast<BYTE*>(mvsGrassByteCode->GetBufferPointer()), mvsGrassByteCode->GetBufferSize() };
+    grassPsoDesc.PS = { reinterpret_cast<BYTE*>(mpsGrassByteCode->GetBufferPointer()), mpsGrassByteCode->GetBufferSize() };
+    grassPsoDesc.HS = { nullptr, 0 };
+    grassPsoDesc.DS = { nullptr, 0 };
+    grassPsoDesc.InputLayout = { nullptr, 0 };
+    grassPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&grassPsoDesc, IID_PPV_ARGS(&mGrassPSO)));
 
     psoDesc.VS = { reinterpret_cast<BYTE*>(mvsWaveByteCode->GetBufferPointer()), mvsWaveByteCode->GetBufferSize() };
     psoDesc.HS = { reinterpret_cast<BYTE*>(mhsWaveByteCode->GetBufferPointer()), mhsWaveByteCode->GetBufferSize() };
@@ -1582,6 +2202,7 @@ void Meow::BuildPSO() {
 
     psoDesc.BlendState.RenderTarget[0] = transparencyBlendDesc;
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mWaterPSO)));
+
 }
 
 void Meow::BuildDisplayPSO()
@@ -1646,7 +2267,18 @@ void Meow::BuildGlowPSO()
     psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
 
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mGlowPSO)));
+
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    psoDesc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    psoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    psoDesc.DepthStencilState.DepthEnable = TRUE;
+    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_LINE;
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mOctreeDebugPSO)));
 }
+
+
+
 std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> Meow::GetStaticSamplers()
 {
 
