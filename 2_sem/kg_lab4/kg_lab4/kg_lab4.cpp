@@ -20,6 +20,9 @@
 #include <assimp/postprocess.h>
 #include <DirectXColors.h>
 
+#include <SimpleMath.h>
+using namespace DirectX::SimpleMath;
+
 #define TINYOBJLOADER_IMPLEMENTATION
 #include "tiny_obj_loader.h"
 
@@ -94,6 +97,7 @@ private:
     void BuildDisplayPSO();
     void UpdatePassCB(const GameTimer& gt);
     void BuildDeferredLights();
+    void BuildShadowMap();
     void AddDirectionalDeferredLight(const XMFLOAT3& direction, const XMFLOAT3& strength);
     void AddPointDeferredLight(const XMFLOAT3& position, const XMFLOAT3& strength, float falloffStart, float falloffEnd);
     void AddSpotDeferredLight(const XMFLOAT3& position, const XMFLOAT3& direction, const XMFLOAT3& strength, float falloffStart, float falloffEnd, float spotPower);
@@ -129,7 +133,7 @@ private:
     XMFLOAT3 mRight = { 1.0f, 0.0f, 0.0f };
     XMFLOAT3 mUp = { 0.0f, 1.0f, 0.0f };
 
-    std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> GetStaticSamplers();
+    std::array<const CD3DX12_STATIC_SAMPLER_DESC, 7> GetStaticSamplers();
 
     std::unique_ptr<MeshGeometry> mBoxGeo = nullptr;
 
@@ -151,6 +155,25 @@ private:
     PassConstants mMainPassCB;
     std::unique_ptr<UploadBuffer<PassConstants>> mPassCB;
 
+    struct CascadeGpuData
+    {
+        XMFLOAT4X4 LightViewProj = MathHelper::Identity4x4();
+        XMFLOAT4X4 ShadowTran = MathHelper::Identity4x4();
+        XMFLOAT4 Distances = XMFLOAT4(40.0f, 300.0f, 1000.0f, 0.0f);
+        XMFLOAT4 Padding[7] = {};
+    };
+    struct ShadowConstants
+    {
+        CascadeGpuData Cascades[3];
+        UINT gCascadeIndex;
+        XMFLOAT3 padding_end;
+    };
+    ShadowConstants mShadowCBData;
+    std::unique_ptr<UploadBuffer<ShadowConstants>> mShadowCB;
+    ComPtr<ID3D12Resource> ShadowMap = nullptr;
+    D3D12_VIEWPORT Viewport{};
+    CD3DX12_RECT ScissorRect{};
+
     std::unordered_map<std::string, std::unique_ptr<Texture>> mTextures;
 
     std::unordered_map<std::string, std::unique_ptr<Material>> mMaterials;
@@ -171,6 +194,7 @@ private:
     ComPtr<ID3D12PipelineState> mPSO = nullptr;
 
     ComPtr<ID3DBlob> mvsLightByteCode = nullptr;
+    ComPtr<ID3DBlob> mvsShadowByteCode = nullptr;
     ComPtr<ID3DBlob> mpsLightByteCode = nullptr;
     ComPtr<ID3D12PipelineState> mLightPSO = nullptr;
 
@@ -183,6 +207,7 @@ private:
     ComPtr<ID3DBlob> mvsGlowByteCode = nullptr;
     ComPtr<ID3DBlob> mpsGlowByteCode = nullptr;
     ComPtr<ID3D12PipelineState> mGlowPSO = nullptr;
+    ComPtr<ID3D12PipelineState> mShadowPSO = nullptr;
 
     std::vector<std::unique_ptr<RenderItem>> mAllRitems;
     std::vector<RenderItem*> mOpaqueRitems;
@@ -249,13 +274,16 @@ private:
         float Scale;
     };
     std::unique_ptr<UploadBuffer<GrassInstanceData>> mGrassInstanceBuffer = nullptr;
-    UINT mGrassInstanceCount = 100000; 
+    UINT mGrassInstanceCount = 1;
     ComPtr<ID3D12RootSignature> mGrassRootSignature = nullptr;
     ComPtr<ID3D12PipelineState> mGrassPSO = nullptr;
     ComPtr<ID3DBlob> mvsGrassByteCode = nullptr;
     ComPtr<ID3DBlob> mpsGrassByteCode = nullptr;
     std::vector<GrassInstanceData> mAllGrassInstances;
     UINT mVisibleGrassCount = 0;
+
+    ComPtr<ID3D12DescriptorHeap> mShadowDsvHeap;
+    const int mapSize = 4096;
 };
 
 Meow::Meow(HINSTANCE hInstance)
@@ -284,11 +312,12 @@ bool Meow::Initialize()
     BuildGrass();
     BuildGrassRootSignature();
     BuildPSO();
-    BuildDisplayPSO();
     BuildGlowPSO();
 
     mgBuffer = new GBuffer(md3dDevice.Get(), mClientWidth, mClientHeight);
     BuildDeferredLights();
+    BuildShadowMap();
+    BuildDisplayPSO();
     ThrowIfFailed(mCommandList->Close());
     ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
     mCommandQueue->ExecuteCommandLists(_countof(cmdsLists), cmdsLists);
@@ -463,6 +492,14 @@ void Meow::Update(const GameTimer& gt)
         pos = XMVectorMultiplyAdd(XMVectorReplicate(-speed), right, pos);
     if (GetAsyncKeyState('D') & 0x8000)
         pos = XMVectorMultiplyAdd(XMVectorReplicate(speed), right, pos);
+
+    const float sunSpeed = 0.02f;
+    if (GetAsyncKeyState(VK_LEFT) & 0x8000) mSunTheta -= sunSpeed;
+    if (GetAsyncKeyState(VK_RIGHT) & 0x8000) mSunTheta += sunSpeed;
+    if (GetAsyncKeyState(VK_UP) & 0x8000) mSunPhi += sunSpeed;
+    if (GetAsyncKeyState(VK_DOWN) & 0x8000) mSunPhi -= sunSpeed;
+
+    mSunPhi = MathHelper::Clamp(mSunPhi, 0.01f, XM_PI - 0.01f);
 
     const bool isSpaceDown = (GetAsyncKeyState(VK_SPACE) & 0x8000) != 0;
     if (isSpaceDown && !mWasSpaceDown)
@@ -788,6 +825,75 @@ void Meow::Draw(const GameTimer& gt)
     ThrowIfFailed(cmdListAlloc->Reset());
     ThrowIfFailed(mCommandList->Reset(cmdListAlloc, mPSO.Get()));
 
+    auto shadowToDepthWrite = CD3DX12_RESOURCE_BARRIER::Transition(
+        ShadowMap.Get(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    mCommandList->ResourceBarrier(1, &shadowToDepthWrite);
+
+    mCommandList->SetPipelineState(mShadowPSO.Get());
+    mCommandList->SetGraphicsRootSignature(mLightRootSig.Get());
+    mCommandList->RSSetViewports(1, &Viewport);
+    mCommandList->RSSetScissorRects(1, &ScissorRect);
+    auto shadowDsv = mShadowDsvHeap->GetCPUDescriptorHandleForHeapStart();
+    const UINT shadowDsvSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+
+    UINT objCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
+    UINT matCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(MaterialConstants));
+    UINT srvSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    ID3D12DescriptorHeap* descriptorHeaps[] = { mSrvDescriptorHeap.Get() };
+    mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
+
+    constexpr UINT cascadesCount = 3;
+    UINT shadowCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(ShadowConstants));
+
+    for (UINT cascadeIndex = 0; cascadeIndex < cascadesCount; ++cascadeIndex)
+    {
+        mShadowCBData.gCascadeIndex = cascadeIndex;
+        mShadowCB->CopyData(cascadeIndex, mShadowCBData);
+
+        D3D12_GPU_VIRTUAL_ADDRESS cbAddress = mShadowCB->Resource()->GetGPUVirtualAddress();
+        cbAddress += cascadeIndex * shadowCBByteSize;
+
+        mCommandList->SetGraphicsRootConstantBufferView(2, cbAddress);
+
+        D3D12_CPU_DESCRIPTOR_HANDLE cascadeDsv = shadowDsv;
+        cascadeDsv.ptr += static_cast<SIZE_T>(cascadeIndex) * shadowDsvSize;
+
+        mCommandList->ClearDepthStencilView(cascadeDsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
+        mCommandList->OMSetRenderTargets(0, nullptr, false, &cascadeDsv);
+
+        for (auto ri : mOpaqueRitems) {
+            auto vbv = ri->Geo->VertexBufferView();
+            auto ibv = ri->Geo->IndexBufferView();
+            mCommandList->IASetVertexBuffers(0, 1, &vbv);
+            mCommandList->IASetIndexBuffer(&ibv);
+            mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+            CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
+            int texIdx = (ri->Mat->DiffuseSrvHeapIndex >= 0) ? ri->Mat->DiffuseSrvHeapIndex : 0;
+            texHandle.Offset(texIdx, srvSize);
+
+            mCommandList->SetGraphicsRootDescriptorTable(0, texHandle);
+
+            mCommandList->SetGraphicsRootConstantBufferView(3,
+                mObjectCB->Resource()->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBByteSize);
+
+            mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
+        }
+    }
+    // mShadowCBData.Cascades[0].LightViewProj = originalCascade0LightViewProj;
+    // mShadowCB->CopyData(0, mShadowCBData);
+
+    auto shadowToPixelSrv = CD3DX12_RESOURCE_BARRIER::Transition(
+        ShadowMap.Get(),
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    mCommandList->ResourceBarrier(1, &shadowToPixelSrv);
+
+    mCommandList->SetPipelineState(mPSO.Get());
+   // mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
     mgBuffer->TransitToOpaqueRenderingState(mCommandList); //////////////ggggggggggg
     const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -809,18 +915,10 @@ void Meow::Draw(const GameTimer& gt)
     auto dsv = DepthStencilView();
     mCommandList->OMSetRenderTargets(3, grtvs, true, &dsv);
 
-    ID3D12DescriptorHeap* descriptorHeaps[] = { mSrvDescriptorHeap.Get() };
-    mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
-
     mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
 
     mCommandList->SetGraphicsRootConstantBufferView(2, mPassCB->Resource()->GetGPUVirtualAddress());
-
-    UINT objCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(ObjectConstants));
-    UINT matCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(MaterialConstants));
-    UINT srvSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
 
     for (auto ri : mVisibleOpaqueRitems) {
         auto vbv = ri->Geo->VertexBufferView();
@@ -841,8 +939,9 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
     }
 
-    mCommandList->SetGraphicsRootShaderResourceView(0, mGrassInstanceBuffer->Resource()->GetGPUVirtualAddress());
-    mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
+    //mCommandList->SetGraphicsRootShaderResourceView(0, mGrassInstanceBuffer->Resource()->GetGPUVirtualAddress());
+    //mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
+    //mCommandList->SetGraphicsRootConstantBufferView(2, mShadowCB->Resource()->GetGPUVirtualAddress());
 
     mCommandList->SetPipelineState(mCurtainPSO.Get());
     for (auto ri : mVisibleCurtainRitems) {
@@ -917,7 +1016,7 @@ void Meow::Draw(const GameTimer& gt)
     mCommandList->SetDescriptorHeaps(_countof(heaps), heaps);
     mCommandList->SetGraphicsRootDescriptorTable(0, mgBuffer->mSrvBaseGpuHandle);
     mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
-
+    mCommandList->SetGraphicsRootConstantBufferView(2, mShadowCB->Resource()->GetGPUVirtualAddress());
 
 
     mCommandList->IASetVertexBuffers(0, 0, nullptr);
@@ -1072,15 +1171,17 @@ void Meow::BuildRootSignature() {
 void Meow::BuildLightRootSignature()
 {
     CD3DX12_DESCRIPTOR_RANGE texTable;
-    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0);
+    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 5, 0);
 
-    CD3DX12_ROOT_PARAMETER slotRootParameter[2];
+    CD3DX12_ROOT_PARAMETER slotRootParameter[4];
     slotRootParameter[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
     slotRootParameter[1].InitAsConstantBufferView(0);
+    slotRootParameter[2].InitAsConstantBufferView(1);
+    slotRootParameter[3].InitAsConstantBufferView(2);
 
     auto staticSamplers = GetStaticSamplers();
 
-    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(2, slotRootParameter,
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(4, slotRootParameter,
         (UINT)staticSamplers.size(), staticSamplers.data(),
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
@@ -1169,6 +1270,7 @@ void Meow::BuildConstantBuffers() {
     mObjectCB = std::make_unique<UploadBuffer<ObjectConstants>>(md3dDevice.Get(), objCount, true);
     mMaterialCB = std::make_unique<UploadBuffer<MaterialConstants>>(md3dDevice.Get(), matCount, true);
     mPassCB = std::make_unique<UploadBuffer<PassConstants>>(md3dDevice.Get(), 1, true);
+    mShadowCB = std::make_unique<UploadBuffer<ShadowConstants>>(md3dDevice.Get(), 1, true);
 }
 
 void Meow::BuildMaterials() {
@@ -1237,7 +1339,7 @@ void Meow::AddSpotDeferredLight(const XMFLOAT3& position, const XMFLOAT3& direct
 
 void Meow::BuildDeferredLights()
 {
-    UINT kPointLights = 100;
+    UINT kPointLights = 0;
     mStaticLights.clear();
     mDeferredLights.clear();
     mNumDirLights = 0;
@@ -1249,7 +1351,7 @@ void Meow::BuildDeferredLights()
     XMVECTOR lightDir = -MathHelper::SphericalToCartesian(1.0f, mSunTheta, mSunPhi);
     XMFLOAT3 dirNorm;
     XMStoreFloat3(&dirNorm, XMVector3Normalize(lightDir));
-    AddDirectionalDeferredLight(dirNorm, XMFLOAT3(0.45f, 0.45f, 0.40f));
+    AddDirectionalDeferredLight(XMFLOAT3(0.0f, -1.0f, 0.0f), XMFLOAT3(0.45f, 0.45f, 0.40f));
 
     for (UINT i = 0; i < kPointLights; ++i)
     {
@@ -1261,7 +1363,7 @@ void Meow::BuildDeferredLights()
     XMVECTOR spotDir = XMVector3Normalize(XMVectorSet(0.7f, -1.0f, -0.7f, 0.0f));
     XMFLOAT3 spotDirNorm;
     XMStoreFloat3(&spotDirNorm, spotDir);
-    AddSpotDeferredLight(XMFLOAT3(0.0f, 100.0f, 10.0f), spotDirNorm, XMFLOAT3(10.8f, 10.5f, 111.0f), 500.0f, 10000.0f, 200.0f);
+    //AddSpotDeferredLight(XMFLOAT3(0.0f, 100.0f, 10.0f), spotDirNorm, XMFLOAT3(10.8f, 10.5f, 111.0f), 500.0f, 10000.0f, 200.0f);
 
     mStaticLights = mDeferredLights;
     mStaticDirLights = mNumDirLights;
@@ -1275,6 +1377,93 @@ void Meow::BuildDeferredLights()
     }
 
     mgBuffer->UpdateLightSrv(md3dDevice.Get(), mLightSB->Resource(), static_cast<UINT>(mStaticLights.size()) + kMaxBullets, sizeof(Light));
+}
+
+void Meow::BuildShadowMap()
+{
+    //const int mapSize = 2048;
+    const int cascadesCount = 3;
+    auto device = md3dDevice.Get();
+
+    auto heapProperties = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    auto resDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R32_TYPELESS, mapSize, mapSize, cascadesCount, 1, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL);
+
+    D3D12_CLEAR_VALUE optCV;
+    optCV.Format = DXGI_FORMAT_D32_FLOAT;
+    optCV.DepthStencil.Depth = 1.0f;
+    optCV.DepthStencil.Stencil = 0;
+
+    ThrowIfFailed(device->CreateCommittedResource(
+        &heapProperties, D3D12_HEAP_FLAG_NONE,
+        &resDesc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        &optCV, IID_PPV_ARGS(&ShadowMap)));
+
+    auto shadowSrvHandle = mgBuffer->mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
+    shadowSrvHandle.ptr += 4 * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srvDesc.Texture2DArray.MostDetailedMip = 0;
+    srvDesc.Texture2DArray.MipLevels = 1;
+    srvDesc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+    srvDesc.Texture2DArray.FirstArraySlice = 0;
+    srvDesc.Texture2DArray.ArraySize = cascadesCount;
+    srvDesc.Texture2DArray.PlaneSlice = 0;
+
+    device->CreateShaderResourceView(ShadowMap.Get(), &srvDesc, shadowSrvHandle);
+
+    Viewport = D3D12_VIEWPORT{ 0, 0, static_cast<float>(mapSize), static_cast<float>(mapSize), 0.0f, 1.0f };
+    ScissorRect = CD3DX12_RECT(0, 0, LONG_MAX, LONG_MAX);
+
+    D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
+    dsvHeapDesc.NumDescriptors = cascadesCount;
+    dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
+    dsvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
+    ThrowIfFailed(device->CreateDescriptorHeap(&dsvHeapDesc, IID_PPV_ARGS(&mShadowDsvHeap)));
+
+
+    D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
+    dsvDesc.Flags = D3D12_DSV_FLAG_NONE;
+    dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
+    dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
+    dsvDesc.Texture2DArray.ArraySize = 1;
+    dsvDesc.Texture2DArray.MipSlice = 0;
+
+    auto shadowDsvHandle = mShadowDsvHeap->GetCPUDescriptorHandleForHeapStart();
+    const UINT dsvDescriptorSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_DSV);
+    for (UINT cascadeIndex = 0; cascadeIndex < cascadesCount; ++cascadeIndex)
+    {
+        dsvDesc.Texture2DArray.FirstArraySlice = cascadeIndex;
+        device->CreateDepthStencilView(ShadowMap.Get(), &dsvDesc, shadowDsvHandle);
+        shadowDsvHandle.ptr += dsvDescriptorSize;
+    }
+
+    mShadowCB = std::make_unique<UploadBuffer<ShadowConstants>>(device, 3, true);
+}
+
+
+std::vector<Vector4> GetFrustumCornersWorldSpace(const Matrix& view, const Matrix& proj) {
+    const auto viewProj = view * proj;
+    const auto inv = viewProj.Invert();
+
+    std::vector<Vector4> frustumCorners;
+    frustumCorners.reserve(8);
+    for (unsigned int x = 0; x < 2; ++x) {
+        for (unsigned int y = 0; y < 2; ++y) {
+            for (unsigned int z = 0; z < 2; ++z) {
+                const Vector4 pt =
+                    Vector4::Transform(Vector4(
+                        2.0f * x - 1.0f,
+                        2.0f * y - 1.0f,
+                        z,
+                        1.0f), inv);
+                frustumCorners.push_back(pt / pt.w);
+            }
+        }
+    }
+    return frustumCorners;
 }
 
 void Meow::UpdatePassCB(const GameTimer& gt)
@@ -1303,7 +1492,6 @@ void Meow::UpdatePassCB(const GameTimer& gt)
     mMainPassCB.DeltaTime = gt.DeltaTime();
     mMainPassCB.AmbientLight = { 0.25f, 0.25f, 0.35f, 1.0f };
 
-    // XMVECTOR lightDir = -MathHelper::SphericalToCartesian(1.0f, mSunTheta, mSunPhi);
 
     mMainPassCB.NumDirLights = mNumDirLights;
     mMainPassCB.NumPointLights = mNumPointLights;
@@ -1319,6 +1507,64 @@ void Meow::UpdatePassCB(const GameTimer& gt)
 
     auto currPassCB = mPassCB.get();
     currPassCB->CopyData(0, mMainPassCB);
+
+    Matrix viewSm(view);
+    Matrix projSm(proj);
+    auto corners = GetFrustumCornersWorldSpace(viewSm, projSm);
+
+    Vector3 center = Vector3::Zero;
+    float cascadeDistances[4] = { 1.0f, 300.0f, 1000.0f, 10000.0f };
+    Vector3 inLightDirection = Vector3(mDeferredLights[0].Direction.x, mDeferredLights[0].Direction.y, mDeferredLights[0].Direction.z);
+
+    for (int i = 0; i < 3; ++i)
+    {
+
+        Matrix projSm = XMMatrixPerspectiveFovLH(0.25f * MathHelper::Pi, AspectRatio(), cascadeDistances[i], cascadeDistances[i + 1]);
+        Matrix viewSm(view);
+        auto corners = GetFrustumCornersWorldSpace(viewSm, projSm);
+
+        Vector3 center = Vector3::Zero;
+        for (const auto& v : corners) {
+            center += Vector3(v.x, v.y, v.z);
+        }
+        center /= (float)corners.size();
+
+        const auto lightView = Matrix::CreateLookAt(center, center + inLightDirection, Vector3::Up);
+
+        float minX = std::numeric_limits<float>::max();
+        float maxX = std::numeric_limits<float>::lowest();
+        float minY = std::numeric_limits<float>::max();
+        float maxY = std::numeric_limits<float>::lowest();
+        float minZ = std::numeric_limits<float>::max();
+        float maxZ = std::numeric_limits<float>::lowest();
+        for (const auto& v : corners) {
+            const auto trf = Vector4::Transform(v, lightView);
+
+            minX = std::min(minX, trf.x);
+            maxX = std::max(maxX, trf.x);
+            minY = std::min(minY, trf.y);
+            maxY = std::max(maxY, trf.y);
+            minZ = std::min(minZ, trf.z);
+            maxZ = std::max(maxZ, trf.z);
+        }
+
+        constexpr float zMult = 10.0f;
+        minZ = (minZ < 0) ? minZ * zMult : minZ / zMult;
+        maxZ = (maxZ < 0) ? maxZ / zMult : maxZ * zMult;
+
+        auto lightProjection = Matrix::CreateOrthographicOffCenter(minX, maxX, minY, maxY, minZ, maxZ);
+        Matrix lightViewProj = lightView * lightProjection;
+        Matrix T(0.5f, 0.0f, 0.0f, 0.0f,
+            0.0f, -0.5f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.5f, 0.5f, 0.0f, 1.0f);
+        Matrix shadowTran = lightViewProj * T;
+
+        XMStoreFloat4x4(&mShadowCBData.Cascades[i].LightViewProj, XMMatrixTranspose(XMLoadFloat4x4(reinterpret_cast<XMFLOAT4X4*>(&lightViewProj))));
+        XMStoreFloat4x4(&mShadowCBData.Cascades[i].ShadowTran, XMMatrixTranspose(XMLoadFloat4x4(reinterpret_cast<XMFLOAT4X4*>(&shadowTran))));
+    }
+    mShadowCBData.Cascades[0].Distances = XMFLOAT4(cascadeDistances[1], cascadeDistances[2], cascadeDistances[3], 0.0f);
+    mShadowCB->CopyData(0, mShadowCBData);
 }
 
 
@@ -1337,6 +1583,7 @@ void Meow::BuildShadersAndInputLayout()
         mdsByteCode = d3dUtil::CompileShader(shaderPath, nullptr, "DS", "ds_5_0");
 
         mvsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "VS", "vs_5_0");
+        mvsShadowByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "VS_Shadow", "vs_5_0");
         mpsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "PS", "ps_5_0");
 
         mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
@@ -1524,12 +1771,8 @@ void Meow::LoadModelAndTextures()
     std::vector<Vertex> vertices;
     std::vector<std::uint32_t> indices;
 
-    const std::array<XMFLOAT3, 5> sponzaInstanceOffsets = {
-        XMFLOAT3{ 20.0f, 5.0f, -10.0f },
-        XMFLOAT3{ -170.0f, 5.0f, -10.0f },
-        XMFLOAT3{ 210.0f, 5.0f, -10.0f },
-        XMFLOAT3{ 20.0f, 5.0f, -190.0f },
-        XMFLOAT3{ 20.0f, 5.0f, 170.0f }
+    const std::array<XMFLOAT3, 1> sponzaInstanceOffsets = {
+        XMFLOAT3{ 20.0f, 5.0f, -10.0f }
     };
 
     for (unsigned int m = 0; m < sponza->mNumMeshes; ++m) {
@@ -1569,24 +1812,24 @@ void Meow::LoadModelAndTextures()
             indices.push_back(mesh->mFaces[i].mIndices[2]);
         }
 
-       /* auto ritem = std::make_unique<RenderItem>();
-        ritem->World = MathHelper::Identity4x4();
-        XMStoreFloat4x4(&ritem->World, XMMatrixScaling(0.1f, 0.1f, 0.1f));
-        ritem->ObjCBIndex = m;
-        ritem->Geo = mModelSponza.get();
-        ritem->IndexCount = subMesh.IndexCount;
-        ritem->StartIndexLocation = subMesh.StartIndexLocation;
-        ritem->BaseVertexLocation = subMesh.BaseVertexLocation;
-        ritem->LocalBounds.Center = {
-            (minPos.x + maxPos.x) * 0.5f,
-            (minPos.y + maxPos.y) * 0.5f,
-            (minPos.z + maxPos.z) * 0.5f
-        };
-        ritem->LocalBounds.Extents = {
-            (maxPos.x - minPos.x) * 0.5f,
-            (maxPos.y - minPos.y) * 0.5f,
-            (maxPos.z - minPos.z) * 0.5f
-        };*/
+        /* auto ritem = std::make_unique<RenderItem>();
+         ritem->World = MathHelper::Identity4x4();
+         XMStoreFloat4x4(&ritem->World, XMMatrixScaling(0.1f, 0.1f, 0.1f));
+         ritem->ObjCBIndex = m;
+         ritem->Geo = mModelSponza.get();
+         ritem->IndexCount = subMesh.IndexCount;
+         ritem->StartIndexLocation = subMesh.StartIndexLocation;
+         ritem->BaseVertexLocation = subMesh.BaseVertexLocation;
+         ritem->LocalBounds.Center = {
+             (minPos.x + maxPos.x) * 0.5f,
+             (minPos.y + maxPos.y) * 0.5f,
+             (minPos.z + maxPos.z) * 0.5f
+         };
+         ritem->LocalBounds.Extents = {
+             (maxPos.x - minPos.x) * 0.5f,
+             (maxPos.y - minPos.y) * 0.5f,
+             (maxPos.z - minPos.z) * 0.5f
+         };*/
 
         aiMaterial* aiMat = sponza->mMaterials[mesh->mMaterialIndex];
         aiString mName; aiMat->Get(AI_MATKEY_NAME, mName);
@@ -2168,7 +2411,27 @@ void Meow::BuildPSO() {
     psoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
 
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPSO)));
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadowPsoDesc = psoDesc;
+    shadowPsoDesc.pRootSignature = mLightRootSig.Get();
+    shadowPsoDesc.VS = { reinterpret_cast<BYTE*>(mvsShadowByteCode->GetBufferPointer()), mvsShadowByteCode->GetBufferSize() };
+    shadowPsoDesc.HS = { nullptr, 0 };
+    shadowPsoDesc.DS = { nullptr, 0 };
+    shadowPsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    shadowPsoDesc.PS = { nullptr, 0 };
+    shadowPsoDesc.NumRenderTargets = 0;
+    shadowPsoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+    shadowPsoDesc.RTVFormats[1] = DXGI_FORMAT_UNKNOWN;
+    shadowPsoDesc.RTVFormats[2] = DXGI_FORMAT_UNKNOWN;
+    shadowPsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+    shadowPsoDesc.RasterizerState.DepthBias = 500;
+    shadowPsoDesc.RasterizerState.SlopeScaledDepthBias = 1.0f;
+    shadowPsoDesc.RasterizerState.DepthBiasClamp = 0.0f;
+    shadowPsoDesc.RasterizerState.CullMode = D3D12_CULL_MODE_BACK;
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&shadowPsoDesc, IID_PPV_ARGS(&mShadowPSO)));
+
     D3D12_GRAPHICS_PIPELINE_STATE_DESC grassPsoDesc = psoDesc;
+    grassPsoDesc.pRootSignature = mRootSignature.Get();
     grassPsoDesc.pRootSignature = mGrassRootSignature.Get();
     grassPsoDesc.VS = { reinterpret_cast<BYTE*>(mvsGrassByteCode->GetBufferPointer()), mvsGrassByteCode->GetBufferSize() };
     grassPsoDesc.PS = { reinterpret_cast<BYTE*>(mpsGrassByteCode->GetBufferPointer()), mpsGrassByteCode->GetBufferSize() };
@@ -2279,7 +2542,7 @@ void Meow::BuildGlowPSO()
 
 
 
-std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> Meow::GetStaticSamplers()
+std::array<const CD3DX12_STATIC_SAMPLER_DESC, 7> Meow::GetStaticSamplers()
 {
 
 
@@ -2328,11 +2591,22 @@ std::array<const CD3DX12_STATIC_SAMPLER_DESC, 6> Meow::GetStaticSamplers()
         D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressW
         0.0f,                              // mipLODBias
         8);                                // maxAnisotropy
+    const CD3DX12_STATIC_SAMPLER_DESC shadowBorder(
+        6, // shaderRegister (s1)
+        D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT, // filter
+        D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressU
+        D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressV
+        D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressW
+        0.0f,                               // mipLODBias
+        16,                                 // maxAnisotropy
+        D3D12_COMPARISON_FUNC_LESS_EQUAL,   // comparisonFunc 
+        D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE); // Чтобы вне тени было светло
+
 
     return {
         pointWrap, pointClamp,
         linearWrap, linearClamp,
-        anisotropicWrap, anisotropicClamp };
+        anisotropicWrap, anisotropicClamp, shadowBorder };
 }
 
 ComPtr<ID3D12Device> Meow::GetDevice() {
@@ -2343,7 +2617,6 @@ ComPtr<ID3D12Device> Meow::GetDevice() {
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
     PSTR cmdLine, int showCmd)
 {
-    // Enable run-time memory check for debug builds.
 #if defined(DEBUG) | defined(_DEBUG)
     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
 #endif

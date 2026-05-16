@@ -24,6 +24,8 @@
 #include "MathHelper.h"
 #include <cstdio>
 #include <stdexcept>
+#include <iomanip>
+
 
 
 using namespace DirectX;
@@ -32,17 +34,55 @@ using Microsoft::WRL::ComPtr;
 
 const int MAX_LIGHT_AMOUNT = 10;
 
-inline void ThrowIfFailed(HRESULT hr)
+inline std::string HrToHexString(HRESULT hr)
+{
+	std::ostringstream oss;
+	oss << "0x" << std::uppercase << std::hex << std::setw(8) << std::setfill('0')
+		<< static_cast<std::uint32_t>(hr);
+	return oss.str();
+}
+
+inline std::string GetHrSystemMessage(HRESULT hr)
+{
+	LPSTR messageBuffer = nullptr;
+	const DWORD flags = FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
+	const DWORD length = FormatMessageA(flags, nullptr, static_cast<DWORD>(hr), 0, reinterpret_cast<LPSTR>(&messageBuffer), 0, nullptr);
+
+	if (length == 0 || messageBuffer == nullptr)
+	{
+		return "No system message available.";
+	}
+
+	std::string message(messageBuffer, length);
+	LocalFree(messageBuffer);
+
+	while (!message.empty() && (message.back() == '\r' || message.back() == '\n'))
+	{
+		message.pop_back();
+	}
+
+	return message;
+}
+
+inline void ThrowIfFailedImpl(HRESULT hr, const char* expression, const char* file, int line)
 {
 	if (FAILED(hr))
 	{
-		char message[64] = {};
-		std::snprintf(message, sizeof(message), "DirectX call failed (hr=0x%08X)", static_cast<unsigned int>(hr));
-		throw std::runtime_error(message);
-
-		//throw std::exception("DirectX call failed");
+		std::ostringstream oss;
+		oss << "HRESULT failed: " << expression
+			<< " (hr=" << HrToHexString(hr) << ")\n"
+			<< "Location: " << file << ":" << line << "\n"
+			<< "System message: " << GetHrSystemMessage(hr);
+		throw std::runtime_error(oss.str());
 	}
 }
+
+inline void ThrowIfFailed(HRESULT hr)
+{
+	ThrowIfFailedImpl(hr, "<unknown expression>", __FILE__, __LINE__);
+}
+
+#define ThrowIfFailed(x) ThrowIfFailedImpl((x), #x, __FILE__, __LINE__)
 
 struct Texture {
 	std::string name;
@@ -139,7 +179,7 @@ struct GBuffer {
 
 
 		D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-		srvHeapDesc.NumDescriptors = 4;
+		srvHeapDesc.NumDescriptors = 5 + 3;
 		srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 		srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 		ThrowIfFailed(device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));

@@ -19,9 +19,11 @@ Texture2D gDiffuseMap : register(t0);
 Texture2D gNormalMap : register(t1);
 Texture2D gDepthMap : register(t2);
 StructuredBuffer<Light> gLights : register(t3);
+Texture2DArray gShadowMap : register(t4);
 
 SamplerState gsamPointWrap : register(s0);
 SamplerState gsamAnisotropicWrap : register(s4);
+SamplerComparisonState gsamBorder : register(s6);
 
 cbuffer cbPass : register(b0)
 {
@@ -47,6 +49,40 @@ cbuffer cbPass : register(b0)
     uint gNumLightsTotal;
 };
 
+struct CascadeData
+{
+    float4x4 lightViewProj;
+    float4x4 shadowTran;
+    float4 distances;
+    float4 padding[7];
+};
+
+cbuffer ShadowCB : register(b1)
+{
+    CascadeData gCascades[3];
+    uint gCascadeIndex;
+    float3 padding_end;
+}
+
+cbuffer cbPerObject : register(b2)
+{
+    float4x4 gWorldViewProj;
+    float4x4 gWorld;
+};
+
+struct ShadowVertexIn
+{
+    float3 PosL : POSITION;
+    float3 NormalL : NORMAL;
+    float2 TexC : TEXCOORD;
+    float3 TangentL : TANGENT;
+};
+
+struct ShadowVertexOut
+{
+    float4 PosH : SV_POSITION;
+};
+
 struct VertexOut
 {
     float4 PosH : SV_POSITION;
@@ -64,6 +100,48 @@ VertexOut VS(uint vid : SV_VertexID)
     return vout;
 }
 
+ShadowVertexOut VS_Shadow(ShadowVertexIn vin)
+{
+    ShadowVertexOut vout;
+    float4 posW = mul(float4(vin.PosL, 1.0f), gWorld);
+    vout.PosH = mul(posW, gCascades[gCascadeIndex].lightViewProj);
+    return vout;
+}
+
+
+float ComputeShadowPCF(float3 posW)
+{
+    float4 viewPos = mul(float4(posW, 1.0f), gView);
+
+    float depthVS = viewPos.z;
+    uint cascadeIndex = 0;
+    [unroll]
+    for (uint j = 0; j < 2; j++)
+    {
+        if (depthVS > gCascades[j].distances[j])
+        {
+            cascadeIndex = j + 1;
+        }
+    }
+    cascadeIndex = min(cascadeIndex, 2u);
+
+
+    float shadowFactor = 1.0f;
+
+    if (cascadeIndex < 3)
+    {
+        float4 shadowPosH = mul(float4(posW, 1.0f), gCascades[cascadeIndex].shadowTran);
+        shadowPosH.xyz /= shadowPosH.w;
+        shadowFactor = gShadowMap.SampleCmpLevelZero(
+            gsamBorder,
+            float3(shadowPosH.xy, (float) cascadeIndex),
+            shadowPosH.z
+        );
+    }
+    return shadowFactor;
+
+}
+
 float4 PS(VertexOut pin) : SV_Target
 {
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamPointWrap, pin.TexC);
@@ -72,35 +150,30 @@ float4 PS(VertexOut pin) : SV_Target
 
     if (depth >= 1.0f)
     {
-        discard; 
+        discard;
     }
-
 
     float2 ndcXY = float2(pin.TexC.x * 2.0f - 1.0f, (1.0f - pin.TexC.y) * 2.0f - 1.0f);
     float4 clipSpacePos = float4(ndcXY, depth, 1.0f);
 
-
     float4 worldPos = mul(clipSpacePos, gInvViewProj);
     float3 posW = worldPos.xyz / worldPos.w;
 
-
     normalW = normalize(normalW);
     float3 toEyeW = normalize(gEyePosW - posW);
-
 
     float roughness = 0.5f;
     float3 fresnelR0 = float3(0.02f, 0.02f, 0.02f);
     float shininess = 1.0f - roughness;
     Material mat = { diffuseAlbedo, fresnelR0, shininess };
     
-    float3 shadowFactor = 1.0f;
-
     float3 directLightColor = 0.0f;
 
     uint i = 0;
     for (i = 0; i < gNumDirLights && i < gNumLightsTotal; ++i)
     {
-        directLightColor += ComputeDirectionalLight(gLights[i], mat, normalW, toEyeW);
+        float shadow = ComputeShadowPCF(posW);
+        directLightColor += ComputeDirectionalLight(gLights[i], mat, normalW, toEyeW) * shadow;
     }
 
     for (; i < gNumDirLights + gNumPointLights && i < gNumLightsTotal; ++i)
@@ -114,18 +187,8 @@ float4 PS(VertexOut pin) : SV_Target
     }
 
     float4 directLight = float4(directLightColor, 0.0f);
-
     float4 litColor = (gAmbientLight * diffuseAlbedo) + directLight;
-    float3 debugColor = float3(0, 0, 0);
 
-    /*float d1 = length(posW - gLights[1].Position);
-    if (d1 < 50.0f)
-        return float4(1.0f, 0.5f, 0.0f, 1.0f); // оранжевый
-
-    float d2 = length(posW - gLights[2].Position);
-    if (d2 < 50.0f)
-        return float4(0.0f, 0.5f, 1.0f, 1.0f); // голубой*/
     litColor.a = diffuseAlbedo.a;
-
-   return litColor;
+    return litColor;
 }
