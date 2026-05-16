@@ -893,7 +893,7 @@ void Meow::Draw(const GameTimer& gt)
     mCommandList->ResourceBarrier(1, &shadowToPixelSrv);
 
     mCommandList->SetPipelineState(mPSO.Get());
-   // mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
+    // mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
     mgBuffer->TransitToOpaqueRenderingState(mCommandList); //////////////ggggggggggg
     const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -2037,6 +2037,90 @@ void Meow::LoadModelAndTextures()
         }
     }
 
+    {
+        std::string cubeMatName = "CubeMat";
+        auto cubeMat = std::make_unique<Material>();
+        cubeMat->name = cubeMatName;
+        cubeMat->matCBIndex = static_cast<int>(mMaterials.size());
+        cubeMat->DiffuseSrvHeapIndex = srvHeapIndex;
+        cubeMat->NormalSrvHeapIndex = srvHeapIndex + 1;
+        cubeMat->HeightSrvHeapIndex = srvHeapIndex + 2;
+        srvHeapIndex += 3;
+
+        loadTextureIfNeeded(baseDirSponza, defaultDiffuseTexName);
+        loadTextureIfNeeded(baseDirSponza, defaultNormalTexName);
+
+        cubeMat->DiffuseMapName = defaultDiffuseTexName;
+        cubeMat->NormalMapName = defaultNormalTexName;
+        cubeMat->HeightMapName = defaultHeightTexName;
+        cubeMat->dispScale = 0.0f;
+
+        mMaterials[cubeMatName] = std::move(cubeMat);
+
+        SubMeshGeometry cubeSubMesh;
+        cubeSubMesh.BaseVertexLocation = static_cast<UINT>(vertices.size());
+        cubeSubMesh.StartIndexLocation = static_cast<UINT>(indices.size());
+
+        vertices.push_back({ {-0.5f, -0.5f, 0.5f}, {0,0,1}, {0,1}, {1,0,0} });
+        vertices.push_back({ { 0.5f, -0.5f, 0.5f}, {0,0,1}, {1,1}, {1,0,0} });
+        vertices.push_back({ { 0.5f,  0.5f, 0.5f}, {0,0,1}, {1,0}, {1,0,0} });
+        vertices.push_back({ {-0.5f,  0.5f, 0.5f}, {0,0,1}, {0,0}, {1,0,0} });
+
+        vertices.push_back({ { 0.5f, -0.5f, -0.5f}, {0,0,-1}, {0,1}, {-1,0,0} });
+        vertices.push_back({ {-0.5f, -0.5f, -0.5f}, {0,0,-1}, {1,1}, {-1,0,0} });
+        vertices.push_back({ {-0.5f,  0.5f, -0.5f}, {0,0,-1}, {1,0}, {-1,0,0} });
+        vertices.push_back({ { 0.5f,  0.5f, -0.5f}, {0,0,-1}, {0,0}, {-1,0,0} });
+
+        vertices.push_back({ { 0.5f, -0.5f, 0.5f}, {1,0,0}, {0,1}, {0,0,1} });
+        vertices.push_back({ { 0.5f, -0.5f, -0.5f}, {1,0,0}, {1,1}, {0,0,1} });
+        vertices.push_back({ { 0.5f,  0.5f, -0.5f}, {1,0,0}, {1,0}, {0,0,1} });
+        vertices.push_back({ { 0.5f,  0.5f, 0.5f}, {1,0,0}, {0,0}, {0,0,1} });
+
+        vertices.push_back({ {-0.5f, -0.5f, -0.5f}, {-1,0,0}, {0,1}, {0,0,-1} });
+        vertices.push_back({ {-0.5f, -0.5f, 0.5f}, {-1,0,0}, {1,1}, {0,0,-1} });
+        vertices.push_back({ {-0.5f,  0.5f, 0.5f}, {-1,0,0}, {1,0}, {0,0,-1} });
+        vertices.push_back({ {-0.5f,  0.5f, -0.5f}, {-1,0,0}, {0,0}, {0,0,-1} });
+
+        vertices.push_back({ {-0.5f, 0.5f, 0.5f}, {0,1,0}, {0,1}, {1,0,0} });
+        vertices.push_back({ { 0.5f, 0.5f, 0.5f}, {0,1,0}, {1,1}, {1,0,0} });
+        vertices.push_back({ { 0.5f, 0.5f, -0.5f}, {0,1,0}, {1,0}, {1,0,0} });
+        vertices.push_back({ {-0.5f, 0.5f, -0.5f}, {0,1,0}, {0,0}, {1,0,0} });
+
+        vertices.push_back({ {-0.5f, -0.5f, -0.5f}, {0,-1,0}, {0,1}, {1,0,0} });
+        vertices.push_back({ { 0.5f, -0.5f, -0.5f}, {0,-1,0}, {1,1}, {1,0,0} });
+        vertices.push_back({ { 0.5f, -0.5f, 0.5f}, {0,-1,0}, {1,0}, {1,0,0} });
+        vertices.push_back({ {-0.5f, -0.5f, 0.5f}, {0,-1,0}, {0,0}, {1,0,0} });
+
+        for (UINT face = 0; face < 6; ++face) {
+            UINT start = face * 4;
+            indices.push_back(start + 0);
+            indices.push_back(start + 1);
+            indices.push_back(start + 2);
+            indices.push_back(start + 0);
+            indices.push_back(start + 2);
+            indices.push_back(start + 3);
+        }
+
+        cubeSubMesh.IndexCount = 36; 
+        auto cubeRitem = std::make_unique<RenderItem>();
+
+        XMMATRIX cubeScale = XMMatrixScaling(10.0f, 10.0f, 10.0f); 
+        XMMATRIX cubeOffset = XMMatrixTranslation(20.0f, 5.0f, -10.0f); 
+        XMStoreFloat4x4(&cubeRitem->World, cubeScale* cubeOffset);
+
+        cubeRitem->ObjCBIndex = static_cast<UINT>(mAllRitems.size());
+        cubeRitem->Geo = mModelSponza.get(); 
+        cubeRitem->IndexCount = cubeSubMesh.IndexCount;
+        cubeRitem->StartIndexLocation = cubeSubMesh.StartIndexLocation;
+        cubeRitem->BaseVertexLocation = cubeSubMesh.BaseVertexLocation;
+        cubeRitem->LocalBounds.Center = XMFLOAT3(0.0f, 0.0f, 0.0f);
+        cubeRitem->LocalBounds.Extents = XMFLOAT3(0.5f, 0.5f, 0.5f);
+
+        cubeRitem->Mat = mMaterials[cubeMatName].get();
+        mAllRitems.push_back(std::move(cubeRitem));
+    }
+
+
     const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
     const UINT ibByteSize = (UINT)indices.size() * sizeof(std::uint32_t);
 
@@ -2130,6 +2214,8 @@ void Meow::LoadModelAndTextures()
     quadRitem->LocalBounds.Extents = { width, 0.05f, height };
 
     mAllRitems.push_back(std::move(quadRitem));
+
+
 
 
 #pragma region CurtainsAndBullets
@@ -2636,3 +2722,4 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
     }
 
 }
+
