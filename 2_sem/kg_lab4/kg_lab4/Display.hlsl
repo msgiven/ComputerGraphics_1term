@@ -20,6 +20,8 @@ Texture2D gNormalMap : register(t1);
 Texture2D gDepthMap : register(t2);
 StructuredBuffer<Light> gLights : register(t3);
 Texture2DArray gShadowMap : register(t4);
+Texture2DArray<uint2> gShadowStencilMap : register(t5);
+Texture2D gTexturedShadowMap : register(t6);
 
 SamplerState gsamPointWrap : register(s0);
 SamplerState gsamAnisotropicWrap : register(s4);
@@ -109,7 +111,7 @@ ShadowVertexOut VS_Shadow(ShadowVertexIn vin)
 }
 
 
-float ComputeShadowPCF(float3 posW)
+float4 ComputeShadowPCF(float3 posW)
 {
     float4 viewPos = mul(float4(posW, 1.0f), gView);
 
@@ -127,6 +129,7 @@ float ComputeShadowPCF(float3 posW)
 
 
     float shadowFactor = 1.0f;
+    float3 shadowTint = float3(0.0f, 0.0f, 0.0f);
 
     if (cascadeIndex < 3)
     {
@@ -137,8 +140,21 @@ float ComputeShadowPCF(float3 posW)
             float3(shadowPosH.xy, (float) cascadeIndex),
             shadowPosH.z
         );
+        
+        uint width = 0, height = 0, elements = 0, levels = 0;
+        gShadowStencilMap.GetDimensions(0, width, height, elements, levels);
+        int2 shadowTexel = int2(saturate(shadowPosH.xy) * float2((float) (width - 1), (float) (height - 1)));
+
+        uint shadowStencil = gShadowStencilMap.Load(int4(shadowTexel, cascadeIndex, 0)).y;
+
+        if (shadowStencil == 1u)
+        {
+            float worldTexelsPerUnit = 1.0f / 8.0f; 
+            float2 shadowTexUV = posW.xz * worldTexelsPerUnit;
+            shadowTint = gTexturedShadowMap.SampleLevel(gsamAnisotropicWrap, shadowTexUV, 0).rgb;
+        }
     }
-    return shadowFactor;
+    return float4(shadowTint, shadowFactor);
 
 }
 
@@ -172,8 +188,14 @@ float4 PS(VertexOut pin) : SV_Target
     uint i = 0;
     for (i = 0; i < gNumDirLights && i < gNumLightsTotal; ++i)
     {
-        float shadow = ComputeShadowPCF(posW);
-        directLightColor += ComputeDirectionalLight(gLights[i], mat, normalW, toEyeW) * shadow;
+        float4 shadowData = ComputeShadowPCF(posW);
+        float3 baseDirectional = ComputeDirectionalLight(gLights[i], mat, normalW, toEyeW);
+
+        float3 regularShadowColor = baseDirectional * shadowData.a;
+        float3 texturedShadowColor = shadowData.rgb * (1.0f - shadowData.a) * baseDirectional;
+        float isTexturedShadow = step(0.01f, length(shadowData.rgb));
+
+        directLightColor += lerp(regularShadowColor, texturedShadowColor, isTexturedShadow);
     }
 
     for (; i < gNumDirLights + gNumPointLights && i < gNumLightsTotal; ++i)
