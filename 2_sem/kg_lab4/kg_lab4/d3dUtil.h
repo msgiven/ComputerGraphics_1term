@@ -191,21 +191,25 @@ struct GBuffer {
 
 
 		auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
-		auto resDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM, width, height, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+		auto resDesc = CD3DX12_RESOURCE_DESC::Tex2D(DXGI_FORMAT_R8G8B8A8_UNORM, 
+			width, height, 1, 0, 1, 0, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
 
 		D3D12_CLEAR_VALUE optCV = {};
 		optCV.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
 		optCV.Color[0] = 0.0f; optCV.Color[1] = 0.0f; optCV.Color[2] = 0.0f; optCV.Color[3] = 1.0f;
 
-		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&DiffuseTex));
+		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, 
+			D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&DiffuseTex));
 
 		resDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
 		optCV.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&NormalTex));
+		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, 
+			D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&NormalTex));
 
 		resDesc.Format = DXGI_FORMAT_R32_FLOAT;
 		optCV.Format = DXGI_FORMAT_R32_FLOAT;
-		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&Pos));
+		device->CreateCommittedResource(&heapProp, D3D12_HEAP_FLAG_NONE, &resDesc, 
+			D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, &optCV, IID_PPV_ARGS(&Pos));
 
 		D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
 		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -245,7 +249,7 @@ struct GBuffer {
 	}
 
 	void TransitToOpaqueRenderingState(ComPtr<ID3D12GraphicsCommandList>& cmdList) {
-		D3D12_RESOURCE_BARRIER barriers[3] = {
+	D3D12_RESOURCE_BARRIER barriers[3] = {
 			CD3DX12_RESOURCE_BARRIER::Transition(DiffuseTex.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
 			CD3DX12_RESOURCE_BARRIER::Transition(NormalTex.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
 			CD3DX12_RESOURCE_BARRIER::Transition(Pos.Get(), D3D12_RESOURCE_STATE_ALL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET)

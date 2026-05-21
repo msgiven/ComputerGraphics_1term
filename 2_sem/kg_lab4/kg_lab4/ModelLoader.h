@@ -56,7 +56,7 @@ class ModelLoader
 {
 public:
 
-	ModelLoader(ComPtr<ID3D12Device> md3dDevice, ComPtr<ID3D12GraphicsCommandList> mCommandList) {
+	ModelLoader(ID3D12Device* md3dDevice, ID3D12GraphicsCommandList* mCommandList) {
 		device = md3dDevice;
 		commandList = mCommandList;
 	}

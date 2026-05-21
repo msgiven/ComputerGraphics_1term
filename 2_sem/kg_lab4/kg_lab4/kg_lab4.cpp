@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 #include "ModelLoader.h"
+#include "PostProcessing.h"
+
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -89,9 +91,11 @@ private:
     void AnimateMaterials(const GameTimer& gt);
     void BuildRootSignature();
     void BuildLightRootSignature();
+    void BuildPostProcRootSignature();
     void BuildShadersAndInputLayout();
     void BuildPSO();
     void BuildDisplayPSO();
+    void BuildPostProcPSO();
     void UpdatePassCB(const GameTimer& gt);
     void BuildDeferredLights();
     void BuildShadowMap();
@@ -119,6 +123,7 @@ private:
 
     ModelLoader* modelLoader;
     GBuffer* mgBuffer;
+    PostProcessing* mPostProc;
 
     XMFLOAT3 mSunThetaPhi = { 1.25f * XM_PI, XM_PIDIV4, 0.0f };
 
@@ -181,6 +186,7 @@ private:
 
     ComPtr<ID3D12RootSignature> mRootSignature;
     ComPtr<ID3D12RootSignature> mLightRootSig;
+    ComPtr<ID3D12RootSignature> mPostProcRootSig;
 
     ComPtr<ID3DBlob> mvsByteCode = nullptr;
     ComPtr<ID3DBlob> mpsByteCode = nullptr;
@@ -192,6 +198,10 @@ private:
     ComPtr<ID3DBlob> mvsShadowByteCode = nullptr;
     ComPtr<ID3DBlob> mpsLightByteCode = nullptr;
     ComPtr<ID3D12PipelineState> mLightPSO = nullptr;
+
+    ComPtr<ID3DBlob> mvsPostProcByteCode = nullptr;
+    ComPtr<ID3DBlob> mpsPostProcByteCode = nullptr;
+    ComPtr<ID3D12PipelineState> mPostProcPSO = nullptr;
 
     ComPtr<ID3DBlob> mvsWaveByteCode = nullptr;
     ComPtr<ID3DBlob> mpsWaveByteCode = nullptr;
@@ -308,6 +318,7 @@ bool Meow::Initialize()
     BuildConstantBuffers();
     BuildRootSignature();
     BuildLightRootSignature();
+    BuildPostProcRootSignature();
     BuildShadersAndInputLayout();
     BuildGrass();
     BuildGrassRootSignature();
@@ -318,6 +329,9 @@ bool Meow::Initialize()
     BuildDeferredLights();
     BuildShadowMap();
     BuildDisplayPSO();
+
+    mPostProc = new PostProcessing(md3dDevice.Get(), mClientWidth, mClientHeight);
+    BuildPostProcPSO();
     ThrowIfFailed(mCommandList->Close());
     ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
     mCommandQueue->ExecuteCommandLists(_countof(cmdsLists), cmdsLists);
@@ -884,8 +898,8 @@ void Meow::Draw(const GameTimer& gt)
             mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
         }
     }
-    // mShadowCBData.Cascades[0].LightViewProj = originalCascade0LightViewProj;
-    // mShadowCB->CopyData(0, mShadowCBData);
+
+
 
     auto shadowToPixelSrv = CD3DX12_RESOURCE_BARRIER::Transition(
         ShadowMap.Get(),
@@ -894,7 +908,6 @@ void Meow::Draw(const GameTimer& gt)
     mCommandList->ResourceBarrier(1, &shadowToPixelSrv);
 
     mCommandList->SetPipelineState(mPSO.Get());
-    // mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
 
     mgBuffer->TransitToOpaqueRenderingState(mCommandList); //////////////ggggggggggg
     const float clearColor[] = { 0.0f, 0.0f, 0.0f, 1.0f };
@@ -928,7 +941,7 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->IASetIndexBuffer(&ibv);
         mCommandList->IASetPrimitiveTopology(ri->PrimitiveType);
 
-        mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
+        //mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
         CD3DX12_GPU_DESCRIPTOR_HANDLE texHandle(mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart());
         int texIdx = (ri->Mat->DiffuseSrvHeapIndex >= 0) ? ri->Mat->DiffuseSrvHeapIndex : 0;
         texHandle.Offset(texIdx, srvSize);
@@ -995,19 +1008,12 @@ void Meow::Draw(const GameTimer& gt)
     }
 
     mgBuffer->TransitToLightRenderingState(mCommandList);
+    mPostProc->TransitToShaderWriteState(mCommandList);
 
-    auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
-        mgBuffer->Pos.Get(),
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    mCommandList->ResourceBarrier(1, &barrier);
-
-
-    auto backBufferRtv = CurrentBackBufferView();
-    mCommandList->OMSetRenderTargets(1, &backBufferRtv, false, nullptr);
-
-
-    mCommandList->ClearRenderTargetView(backBufferRtv, Colors::LightSteelBlue, 0, nullptr);
+    auto postProcRtv = mPostProc->pTexRtv;
+    mCommandList->OMSetRenderTargets(1, &postProcRtv, false, nullptr);
+    const float clearColorPost[] = { 0.4f, 0.58f, 0.93f, 1.0f };
+    mCommandList->ClearRenderTargetView(postProcRtv, clearColorPost, 0, nullptr);
 
 
     mCommandList->SetPipelineState(mLightPSO.Get());
@@ -1030,7 +1036,7 @@ void Meow::Draw(const GameTimer& gt)
     mCommandList->SetDescriptorHeaps(_countof(modelHeaps), modelHeaps);
     mCommandList->SetPipelineState(mGlowPSO.Get());
     mCommandList->SetGraphicsRootSignature(mRootSignature.Get());
-    mCommandList->OMSetRenderTargets(1, &backBufferRtv, false, &dsv);
+    mCommandList->OMSetRenderTargets(1, &postProcRtv, false, &dsv);
     mCommandList->SetGraphicsRootConstantBufferView(2, mPassCB->Resource()->GetGPUVirtualAddress());
 
     for (const BulletState& bullet : mBullets)
@@ -1076,6 +1082,27 @@ void Meow::Draw(const GameTimer& gt)
             mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
         }
     }
+
+
+    //Post process
+    mPostProc->TransitToShaderReadState(mCommandList);
+
+    auto backBufferRtv = CurrentBackBufferView();
+    mCommandList->OMSetRenderTargets(1, &backBufferRtv, false, nullptr);
+    mCommandList->ClearRenderTargetView(backBufferRtv, Colors::LightSteelBlue, 0, nullptr);
+
+    mCommandList->SetPipelineState(mPostProcPSO.Get());
+    mCommandList->SetGraphicsRootSignature(mPostProcRootSig.Get());
+
+    ID3D12DescriptorHeap* postProcHeaps[] = { mPostProc->pSrvDescriptorHeap.Get() };
+    mCommandList->SetDescriptorHeaps(_countof(postProcHeaps), postProcHeaps);
+
+    mCommandList->SetGraphicsRootDescriptorTable(0, mPostProc->pSrvBaseGpuHandle);
+
+    mCommandList->IASetVertexBuffers(0, 0, nullptr);
+    mCommandList->IASetIndexBuffer(nullptr);
+    mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    mCommandList->DrawInstanced(3, 1, 0, 0);
 
     auto barrier2 = CD3DX12_RESOURCE_BARRIER::Transition(CurrentBackBuffer(), D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
     mCommandList->ResourceBarrier(1, &barrier2);
@@ -1200,6 +1227,33 @@ void Meow::BuildLightRootSignature()
         serializedRootSig->GetBufferSize(), IID_PPV_ARGS(&mLightRootSig)));
 }
 
+
+void Meow::BuildPostProcRootSignature() {
+    CD3DX12_DESCRIPTOR_RANGE texTable;
+    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+    CD3DX12_ROOT_PARAMETER slotRootParameter[1];
+    slotRootParameter[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
+
+    auto staticSamplers = GetStaticSamplers();
+
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(1, slotRootParameter,
+        (UINT)staticSamplers.size(), staticSamplers.data(),
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+
+    ComPtr<ID3DBlob> serializedRootSig = nullptr;
+    ComPtr<ID3DBlob> errorBlob = nullptr;
+
+    HRESULT hr = D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1, &serializedRootSig, &errorBlob);
+    if (errorBlob != nullptr)
+    {
+        ::OutputDebugStringA((char*)errorBlob->GetBufferPointer());
+    }
+    ThrowIfFailed(hr);
+
+    ThrowIfFailed(md3dDevice->CreateRootSignature(0, serializedRootSig->GetBufferPointer(),
+        serializedRootSig->GetBufferSize(), IID_PPV_ARGS(&mPostProcRootSig)));
+}
+
 void Meow::BuildDescriptorHeaps()
 {
     UINT numDescriptors = static_cast<UINT>(Materials().size()) * 3;
@@ -1252,7 +1306,7 @@ void Meow::BuildDescriptorHeaps()
             srvDesc.Texture2D.MipLevels = resource->GetDesc().MipLevels;
 
             md3dDevice->CreateShaderResourceView(resource.Get(), &srvDesc, dst);
-            };
+        };
 
         createSrvAtIndex(mat->DiffuseMapName, mat->DiffuseSrvHeapIndex);
         createSrvAtIndex(mat->NormalMapName, mat->NormalSrvHeapIndex);
@@ -1608,6 +1662,7 @@ void Meow::BuildShadersAndInputLayout()
 {
     std::wstring shaderPath = L"color.hlsl";
     std::wstring shaderDisplayPath = L"Display.hlsl";
+    std::wstring shaderPostProcPath = L"PostProcess.hlsl";
     std::wstring waveShaderPath = L"wave.hlsl";
     std::wstring glowShaderPath = L"glow.hlsl";
 
@@ -1621,6 +1676,9 @@ void Meow::BuildShadersAndInputLayout()
         mvsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "VS", "vs_5_0");
         mvsShadowByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "VS_Shadow", "vs_5_0");
         mpsLightByteCode = d3dUtil::CompileShader(shaderDisplayPath, nullptr, "PS", "ps_5_0");
+
+        mvsPostProcByteCode = d3dUtil::CompileShader(shaderPostProcPath, nullptr, "VS", "vs_5_0");
+        mpsPostProcByteCode = d3dUtil::CompileShader(shaderPostProcPath, nullptr, "PS", "ps_5_0");
 
         mvsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "VS", "vs_5_0");
         mhsWaveByteCode = d3dUtil::CompileShader(waveShaderPath, nullptr, "HS", "hs_5_0");
@@ -1996,11 +2054,43 @@ void Meow::BuildDisplayPSO()
 
 
     psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = mBackBufferFormat;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     psoDesc.SampleDesc.Count = 1;
 
     md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mLightPSO));
 }
+
+void Meow::BuildPostProcPSO()
+{
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc;
+    ZeroMemory(&psoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
+
+
+    psoDesc.VS = { reinterpret_cast<BYTE*>(mvsPostProcByteCode->GetBufferPointer()), mvsPostProcByteCode->GetBufferSize() };
+    psoDesc.PS = { reinterpret_cast<BYTE*>(mpsPostProcByteCode->GetBufferPointer()), mpsPostProcByteCode->GetBufferSize() };
+
+    psoDesc.InputLayout = { nullptr, 0 };
+    psoDesc.pRootSignature = mPostProcRootSig.Get();
+
+    psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+
+
+    psoDesc.DepthStencilState.DepthEnable = FALSE;
+    psoDesc.DepthStencilState.StencilEnable = FALSE;
+
+    psoDesc.SampleMask = UINT_MAX;
+    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+
+    psoDesc.NumRenderTargets = 1;
+    psoDesc.RTVFormats[0] = mBackBufferFormat;
+    psoDesc.SampleDesc.Count = 1;
+
+    md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mPostProcPSO));
+}
+
+
 
 void Meow::BuildGlowPSO()
 {
@@ -2027,7 +2117,7 @@ void Meow::BuildGlowPSO()
     psoDesc.InputLayout = { mInputLayoutDesc.data(), (UINT)mInputLayoutDesc.size() };
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = mBackBufferFormat;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
     psoDesc.DSVFormat = mDepthStencilFormat;
     psoDesc.SampleMask = UINT_MAX;
     psoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
@@ -2120,8 +2210,12 @@ ComPtr<ID3D12Device> Meow::GetDevice() {
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
     PSTR cmdLine, int showCmd)
 {
-#if defined(DEBUG) | defined(_DEBUG)
-    _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+#if defined(DEBUG) || defined(_DEBUG)
+    ComPtr<ID3D12Debug> debugController;
+    if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debugController))))
+    {
+        debugController->EnableDebugLayer();
+    }
 #endif
 
     try

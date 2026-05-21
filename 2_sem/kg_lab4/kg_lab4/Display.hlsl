@@ -110,6 +110,10 @@ ShadowVertexOut VS_Shadow(ShadowVertexIn vin)
     return vout;
 }
 
+struct PostProcessOut
+{
+    float4 Scene : SV_Target0;
+};
 
 float4 ComputeShadowPCF(float3 posW)
 {
@@ -158,8 +162,10 @@ float4 ComputeShadowPCF(float3 posW)
 
 }
 
-float4 PS(VertexOut pin) : SV_Target
+PostProcessOut PS(VertexOut pin) : SV_Target
 {
+    PostProcessOut postProcOut;
+    
     float4 diffuseAlbedo = gDiffuseMap.Sample(gsamPointWrap, pin.TexC);
     float3 normalW = gNormalMap.Sample(gsamPointWrap, pin.TexC).xyz;
     float depth = gDepthMap.Sample(gsamPointWrap, pin.TexC).r;
@@ -212,5 +218,6 @@ float4 PS(VertexOut pin) : SV_Target
     float4 litColor = (gAmbientLight * diffuseAlbedo) + directLight;
 
     litColor.a = diffuseAlbedo.a;
-    return litColor;
+    postProcOut.Scene = litColor;
+    return postProcOut;
 }
