@@ -166,6 +166,7 @@ struct GBuffer {
 
 	D3D12_GPU_DESCRIPTOR_HANDLE mSrvBaseGpuHandle;
 
+
 	D3D12_CPU_DESCRIPTOR_HANDLE DiffRTV;
 	D3D12_CPU_DESCRIPTOR_HANDLE NormalRTV;
 	D3D12_CPU_DESCRIPTOR_HANDLE PosRTV;
@@ -185,7 +186,7 @@ struct GBuffer {
 		ThrowIfFailed(device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));
 
 		mSrvBaseGpuHandle = mSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-
+		
 		UINT srvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 		CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 
@@ -226,6 +227,7 @@ struct GBuffer {
 		srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
 		srvHandle.Offset(1, srvSize);
 		device->CreateShaderResourceView(Pos.Get(), &srvDesc, srvHandle);
+
 
 		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(mRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 		UINT rtvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);

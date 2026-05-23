@@ -243,12 +243,13 @@ private:
     std::vector<RenderItem*> mOctreeDebugRitems;
     std::vector<OctreeItem> mStaticOctreeItems;
     std::unique_ptr<OctreeNode> mSceneOctree;
-    bool mShowOctreeDebug = true;
+    bool mShowOctreeDebug = false;
     int mOctreeDebugMaxDepth = 3;
 
 
     std::vector<std::unique_ptr<MeshGeometry>> modelsGeo;
 
+    std::unique_ptr<MeshGeometry> b;
 
     ComPtr<ID3D12PipelineState> mOctreeDebugPSO = nullptr;
 
@@ -292,6 +293,8 @@ private:
 
     ComPtr<ID3D12DescriptorHeap> mShadowDsvHeap;
     const int mapSize = 4096;
+
+    XMMATRIX cubeOffset = XMMatrixTranslation(1.0f, 1.0f, 1.0f);
 };
 
 Meow::Meow(HINSTANCE hInstance)
@@ -330,7 +333,7 @@ bool Meow::Initialize()
     BuildShadowMap();
     BuildDisplayPSO();
 
-    mPostProc = new PostProcessing(md3dDevice.Get(), mClientWidth, mClientHeight);
+    mPostProc = new PostProcessing(md3dDevice.Get(), mClientWidth, mClientHeight, mgBuffer);
     BuildPostProcPSO();
     ThrowIfFailed(mCommandList->Close());
     ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
@@ -543,10 +546,20 @@ void Meow::UpdateObjectCBs(const GameTimer& gt) {
     XMMATRIX proj = XMLoadFloat4x4(&mProj);
 
     for (auto& e : AllRitems()) {
-        XMMATRIX world = XMLoadFloat4x4(&e->World);
+        XMMATRIX world;
+       if (e->Mat->name == "CubeMat") {         
+           float t = gt.TotalTime();
+           XMMATRIX dynamicOffset = XMMatrixTranslation(sinf(t * XM_2PI / 10.0f) * 5.0f,
+               0.0f,
+               cosf(t * XM_2PI / 10.0f) * 5.0f);
+           world = XMLoadFloat4x4(&e->World) * dynamicOffset;
+        }
+        else {
+            world = XMLoadFloat4x4(&e->World);
+        }
+        ObjectConstants objConst;
         XMMATRIX worldViewProj = world * view * proj;
 
-        ObjectConstants objConst;
         XMStoreFloat4x4(&objConst.WorldViewProj, XMMatrixTranspose(worldViewProj));
         XMStoreFloat4x4(&objConst.World, XMMatrixTranspose(world));
 
@@ -953,9 +966,6 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
     }
 
-    //mCommandList->SetGraphicsRootShaderResourceView(0, mGrassInstanceBuffer->Resource()->GetGPUVirtualAddress());
-    //mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
-    //mCommandList->SetGraphicsRootConstantBufferView(2, mShadowCB->Resource()->GetGPUVirtualAddress());
 
     mCommandList->SetPipelineState(mCurtainPSO.Get());
     for (auto ri : mVisibleCurtainRitems) {
@@ -1025,7 +1035,6 @@ void Meow::Draw(const GameTimer& gt)
     mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
     mCommandList->SetGraphicsRootConstantBufferView(2, mShadowCB->Resource()->GetGPUVirtualAddress());
 
-
     mCommandList->IASetVertexBuffers(0, 0, nullptr);
     mCommandList->IASetIndexBuffer(nullptr);
     mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1094,10 +1103,12 @@ void Meow::Draw(const GameTimer& gt)
     mCommandList->SetPipelineState(mPostProcPSO.Get());
     mCommandList->SetGraphicsRootSignature(mPostProcRootSig.Get());
 
-    ID3D12DescriptorHeap* postProcHeaps[] = { mPostProc->pSrvDescriptorHeap.Get() };
-    mCommandList->SetDescriptorHeaps(_countof(postProcHeaps), postProcHeaps);
+    ID3D12DescriptorHeap* ppHeaps[] = { mPostProc->pSrvDescriptorHeap.Get() };
+
+    mCommandList->SetDescriptorHeaps(1, ppHeaps);
 
     mCommandList->SetGraphicsRootDescriptorTable(0, mPostProc->pSrvBaseGpuHandle);
+
 
     mCommandList->IASetVertexBuffers(0, 0, nullptr);
     mCommandList->IASetIndexBuffer(nullptr);
@@ -1229,14 +1240,17 @@ void Meow::BuildLightRootSignature()
 
 
 void Meow::BuildPostProcRootSignature() {
+    const int paramsAmount = 1;
     CD3DX12_DESCRIPTOR_RANGE texTable;
-    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
-    CD3DX12_ROOT_PARAMETER slotRootParameter[1];
+    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0);
+
+    CD3DX12_ROOT_PARAMETER slotRootParameter[paramsAmount];
+
     slotRootParameter[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
 
     auto staticSamplers = GetStaticSamplers();
 
-    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(1, slotRootParameter,
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(paramsAmount, slotRootParameter,
         (UINT)staticSamplers.size(), staticSamplers.data(),
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
@@ -1346,7 +1360,6 @@ void Meow::UpdateMaterialCBs(const GameTimer& gt) {
 
     for (auto& e : Materials()) {
         Material* mat = e.second.get();
-
         MaterialConstants matConst;
         XMMATRIX matTransform = XMLoadFloat4x4(&mat->matTransform);
         matConst.DiffuseAlbedo = mat->diffuseAlbedo;
@@ -1738,6 +1751,7 @@ void Meow::LoadModelAndTextures()
     modelsGeo.push_back(modelLoader->LoadModelWithSpecificTextures(oldStoneInfo));
 
     ModelInfo cubeInfo;
+    cubeInfo.name = "cube";
     cubeInfo.baseDir = "sponza\\";
     cubeInfo.diffuseTexName = "Max_logo_2025.dds";
     cubeInfo.normalTexName = "background_ddn.dds";
@@ -1978,12 +1992,13 @@ void Meow::BuildPSO() {
     shadowPsoDesc.RTVFormats[1] = DXGI_FORMAT_UNKNOWN;
     shadowPsoDesc.RTVFormats[2] = DXGI_FORMAT_UNKNOWN;
     shadowPsoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+    
     shadowPsoDesc.DepthStencilState.StencilEnable = true;
     shadowPsoDesc.DepthStencilState.StencilReadMask = 0xFF;
     shadowPsoDesc.DepthStencilState.StencilWriteMask = 0xFF;
-    shadowPsoDesc.DepthStencilState.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_ALWAYS;
+    shadowPsoDesc.DepthStencilState.FrontFace.StencilFunc = D3D12_COMPARISON_FUNC_GREATER_EQUAL;
     shadowPsoDesc.DepthStencilState.FrontFace.StencilPassOp = D3D12_STENCIL_OP_REPLACE;
-    shadowPsoDesc.DepthStencilState.FrontFace.StencilFailOp = D3D12_STENCIL_OP_KEEP;
+    shadowPsoDesc.DepthStencilState.FrontFace.StencilFailOp = D3D12_STENCIL_OP_REPLACE;
     shadowPsoDesc.DepthStencilState.FrontFace.StencilDepthFailOp = D3D12_STENCIL_OP_KEEP;
     shadowPsoDesc.DepthStencilState.BackFace = shadowPsoDesc.DepthStencilState.FrontFace;
     shadowPsoDesc.RasterizerState.DepthBias = 500;
@@ -2054,7 +2069,7 @@ void Meow::BuildDisplayPSO()
 
 
     psoDesc.NumRenderTargets = 1;
-    psoDesc.RTVFormats[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    psoDesc.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
     psoDesc.SampleDesc.Count = 1;
 
     md3dDevice->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&mLightPSO));

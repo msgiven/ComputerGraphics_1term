@@ -41,6 +41,7 @@ const std::string DEFAULT_NORMAL_TEX_NAME = "default_ddn.dds";
 const std::string DEFAULT_HEIGHT_TEX_NAME = "height_ddn.dds";
 
 struct ModelInfo {
+	std::string name = "";
 	std::string baseDir = DEFAULT_BASE_DIR;
 	std::string fileName = "";
 	std::string diffuseTexName = DEFAULT_DIFFUSE_TEX_NAME;

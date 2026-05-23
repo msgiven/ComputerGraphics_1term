@@ -153,7 +153,7 @@ float4 ComputeShadowPCF(float3 posW)
 
         if (shadowStencil == 1u)
         {
-            float worldTexelsPerUnit = 1.0f / 8.0f; 
+            float worldTexelsPerUnit = 1.0f / 2.0f; 
             float2 shadowTexUV = posW.xz * worldTexelsPerUnit;
             shadowTint = gTexturedShadowMap.SampleLevel(gsamAnisotropicWrap, shadowTexUV, 0).rgb;
         }

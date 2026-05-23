@@ -1,6 +1,7 @@
 #pragma once
 #include <d3dx12.h>
 #include "d3dUtil.h"
+#include "UploadBuffer.h"
 using Microsoft::WRL::ComPtr;
 
 class PostProcessing
@@ -14,7 +15,13 @@ public:
 
 	D3D12_CPU_DESCRIPTOR_HANDLE pTexRtv;
 
-	PostProcessing(ID3D12Device* device, int width, int height) {
+
+
+	PostProcessing(ID3D12Device* device, int width, int height, GBuffer* gbuffer) {
+
+		this->device = device;
+
+
 		D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
 		rtvHeapDesc.NumDescriptors = 1;
 		rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
@@ -22,7 +29,7 @@ public:
 		ThrowIfFailed(device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&pRtvDescriptorHeap)));
 
 		D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-		srvHeapDesc.NumDescriptors = 1;
+		srvHeapDesc.NumDescriptors = 2;
 		srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 		srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 		ThrowIfFailed(device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&pSrvDescriptorHeap)));
@@ -43,13 +50,19 @@ public:
 		srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 		srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
 		srvDesc.Texture2D.MipLevels = 1;
+		srvDesc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
-		
 		pSrvBaseGpuHandle = pSrvDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
 		UINT srvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 		CD3DX12_CPU_DESCRIPTOR_HANDLE srvHandle(pSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 		device->CreateShaderResourceView(pTexture.Get(), &srvDesc, srvHandle);
 
+		srvHandle.Offset(1, srvSize);
+
+		CD3DX12_CPU_DESCRIPTOR_HANDLE gbufferSrvStart(gbuffer->mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+		gbufferSrvStart.Offset(2, srvSize);
+
+		device->CopyDescriptorsSimple(1, srvHandle, gbufferSrvStart, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
 		CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(pRtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
 		UINT rtvSize = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -72,7 +85,9 @@ public:
 		};
 		cmdList->ResourceBarrier(1, barriers);
 	}
+
 private:
-	//ComPtr<ID3D12Device> device;
+	ComPtr<ID3D12Device> device;
+
 };
 
