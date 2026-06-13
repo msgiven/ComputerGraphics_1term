@@ -159,6 +159,14 @@ private:
     PassConstants mMainPassCB;
     std::unique_ptr<UploadBuffer<PassConstants>> mPassCB;
 
+    
+    struct DisplayFlagConstants {
+        float isGGX = 1.0f;
+        XMFLOAT3 padding = {};
+    };
+    DisplayFlagConstants dispFlagCB;
+    std::unique_ptr<UploadBuffer<DisplayFlagConstants>> mDisplayFlagCB;
+
     struct CascadeGpuData
     {
         XMFLOAT4X4 LightViewProj = MathHelper::Identity4x4();
@@ -530,6 +538,14 @@ void Meow::Update(const GameTimer& gt)
         SpawnBullet();
     }
     mWasSpaceDown = isSpaceDown;
+
+    static bool prevFlagState = false;
+    bool currFlagState = (GetAsyncKeyState('C') & 0x8000) != 0;
+    if (currFlagState && !prevFlagState) {
+        dispFlagCB.isGGX = -dispFlagCB.isGGX;
+        mDisplayFlagCB->CopyData(0, dispFlagCB);
+    }
+    prevFlagState = currFlagState;
 
     XMStoreFloat3(&mEyePos, pos);
 
@@ -918,6 +934,7 @@ void Meow::Draw(const GameTimer& gt)
             mCommandList->OMSetStencilRef(ri->CastsTexturedShadow ? 1 : 0);
             mCommandList->SetGraphicsRootConstantBufferView(2, cbAddress);
             mCommandList->SetGraphicsRootConstantBufferView(4, mMaterialCB->Resource()->GetGPUVirtualAddress() + ri->Mat->matCBIndex * matCBByteSize);
+            mCommandList->SetGraphicsRootConstantBufferView(5, mDisplayFlagCB->Resource()->GetGPUVirtualAddress());
 
             mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
         }
@@ -973,7 +990,6 @@ void Meow::Draw(const GameTimer& gt)
         mCommandList->SetGraphicsRootDescriptorTable(0, texHandle);
         mCommandList->SetGraphicsRootConstantBufferView(1, mObjectCB->Resource()->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBByteSize);
         mCommandList->SetGraphicsRootConstantBufferView(3, mMaterialCB->Resource()->GetGPUVirtualAddress() + ri->Mat->matCBIndex * matCBByteSize);
-
         mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
     }
 
@@ -1047,6 +1063,7 @@ void Meow::Draw(const GameTimer& gt)
     mCommandList->SetGraphicsRootConstantBufferView(2, mShadowCB->Resource()->GetGPUVirtualAddress());
     mCommandList->SetGraphicsRootConstantBufferView(3, mObjectCB->Resource()->GetGPUVirtualAddress());
     mCommandList->SetGraphicsRootConstantBufferView(4, mMaterialCB->Resource()->GetGPUVirtualAddress());
+    mCommandList->SetGraphicsRootConstantBufferView(5, mDisplayFlagCB->Resource()->GetGPUVirtualAddress());
     mCommandList->IASetVertexBuffers(0, 0, nullptr);
     mCommandList->IASetIndexBuffer(nullptr);
     mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1224,16 +1241,17 @@ void Meow::BuildLightRootSignature()
     CD3DX12_DESCRIPTOR_RANGE texTable;
     texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 10, 0);
 
-    CD3DX12_ROOT_PARAMETER slotRootParameter[5];
+    CD3DX12_ROOT_PARAMETER slotRootParameter[6];
     slotRootParameter[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
     slotRootParameter[1].InitAsConstantBufferView(0);
     slotRootParameter[2].InitAsConstantBufferView(1);
     slotRootParameter[3].InitAsConstantBufferView(2);
     slotRootParameter[4].InitAsConstantBufferView(3);
+    slotRootParameter[5].InitAsConstantBufferView(4);
 
     auto staticSamplers = GetStaticSamplers();
 
-    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(5, slotRootParameter,
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(6, slotRootParameter,
         (UINT)staticSamplers.size(), staticSamplers.data(),
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
@@ -1352,6 +1370,7 @@ void Meow::BuildConstantBuffers() {
     mObjectCB = std::make_unique<UploadBuffer<ObjectConstants>>(md3dDevice.Get(), objCount, true);
     mMaterialCB = std::make_unique<UploadBuffer<MaterialConstants>>(md3dDevice.Get(), matCount, true);
     mPassCB = std::make_unique<UploadBuffer<PassConstants>>(md3dDevice.Get(), 1, true);
+    mDisplayFlagCB = std::make_unique<UploadBuffer<DisplayFlagConstants>>(md3dDevice.Get(), 1, true);
     //mShadowCB = std::make_unique<UploadBuffer<ShadowConstants>>(md3dDevice.Get(), 1, true);
 }
 
@@ -1778,7 +1797,15 @@ void Meow::LoadModelAndTextures()
     ModelInfo quadInfo;
     modelsGeo.push_back(modelLoader->LoadQuad(quadInfo));
 
+
+    
+
+
     ModelInfo sphereInfo;
+    cubeInfo.dispScale = 0.0f;
+    XMMATRIX sphereScale = XMMatrixScaling(10.0f, 10.0f, 10.0f);
+    XMMATRIX sphereOffset = XMMatrixTranslation(20.0f, 55.0f, -10.0f);
+    XMStoreFloat4x4(&sphereInfo.world, sphereScale * sphereOffset);
     modelsGeo.push_back(modelLoader->LoadSphere(sphereInfo));
 
 #pragma region CurtainsAndBullets

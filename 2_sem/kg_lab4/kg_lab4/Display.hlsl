@@ -13,7 +13,7 @@
     #define NUM_SPOT_LIGHTS 1
 #endif
 
-#include "D:\C++Projects\kg_lab4\Shaders\light.hlsl"
+#include "D:\GitHub\ComputerGraphics_1term\2_sem\kg_lab4\Shaders\light.hlsl"
 
 Texture2D gDiffuseMap : register(t0);
 Texture2D gNormalMap : register(t1);
@@ -87,6 +87,12 @@ cbuffer cbMaterial : register(b3)
     float4x4 gMatTransform;
     float gDispScale;
 };
+
+cbuffer cFlag : register(b4)
+{
+    float gisGGX;
+    float3 padding;
+}
 
 struct ShadowVertexIn
 {
@@ -200,7 +206,7 @@ PostProcessOut PS(VertexOut pin) : SV_Target
     normalW = normalize(normalW);
     float3 toEyeW = normalize(gEyePosW - posW);
 
-    float roughness = 0.5f; 
+    float roughness = gRoughness;
     float3 fresnelR0 = gFresnelR0;//float3(0.04f, 0.04f, 0.04f);
     Material mat = { diffuseAlbedo, fresnelR0, roughness };
 
@@ -210,7 +216,7 @@ PostProcessOut PS(VertexOut pin) : SV_Target
     for (i = 0; i < gNumDirLights && i < gNumLightsTotal; ++i)
     {
         float4 shadowData = ComputeShadowPCF(posW);
-        float3 baseDirectional = 0.5f*ComputeDirectionalLight(gLights[i], mat, normalW, toEyeW);
+        float3 baseDirectional =  ComputeDirectionalLight(gLights[i], mat, normalW, toEyeW, gisGGX);
 
         float3 regularShadowColor = baseDirectional * shadowData.a;
         float3 texturedShadowColor = shadowData.rgb * (1.0f - shadowData.a) * baseDirectional;
@@ -221,12 +227,12 @@ PostProcessOut PS(VertexOut pin) : SV_Target
 
     for (; i < gNumDirLights + gNumPointLights && i < gNumLightsTotal; ++i)
     {
-        directLightColor += ComputePointLight(gLights[i], mat, posW, normalW, toEyeW);
+        directLightColor += ComputePointLight(gLights[i], mat, posW, normalW, toEyeW, gisGGX);
     }
 
     for (; i < gNumLightsTotal; ++i)
     {
-        directLightColor += ComputeSpotLight(gLights[i], mat, posW, normalW, toEyeW);
+        directLightColor += ComputeSpotLight(gLights[i], mat, posW, normalW, toEyeW, gisGGX);
     }
 
     float NdotV = max(dot(normalW, toEyeW), 0.0f);
@@ -239,7 +245,7 @@ PostProcessOut PS(VertexOut pin) : SV_Target
     float3 irradiance = gIrradianceMap.Sample(gsamLinearWrap, normalW).rgb;
     float3 diffuseIBL = irradiance * diffuseAlbedo.rgb;
 
-    const float MAX_REFLECTION_LOD = 5.0f;
+    const float MAX_REFLECTION_LOD = 4.0f;
     float3 R_fixed = R;
     R_fixed.y = -R.y;
     float3 prefilteredColor = gPrefilterMap.SampleLevel(gsamLinearWrap, R_fixed, roughness * MAX_REFLECTION_LOD).rgb;
