@@ -136,6 +136,7 @@
     <ClCompile Include="kg_lab4.cpp" />
     <ClCompile Include="MathHelper.cpp" />
     <ClCompile Include="ModelLoader.cpp" />
+    <ClCompile Include="PBR.cpp" />
     <ClCompile Include="PostProcessing.cpp" />
     <ClCompile Include="Vertex.cpp" />
   </ItemGroup>
@@ -150,6 +151,7 @@
     <ClInclude Include="GameTimer.h" />
     <ClInclude Include="MathHelper.h" />
     <ClInclude Include="ModelLoader.h" />
+    <ClInclude Include="PBR.h" />
     <ClInclude Include="PostProcessing.h" />
     <ClInclude Include="tiny_obj_loader.h" />
     <ClInclude Include="UploadBuffer.h" />

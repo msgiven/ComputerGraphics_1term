@@ -62,7 +62,8 @@ float4 PS(VertexOut pin) : SV_Target
 {
     
     float4 originalColor = pSceneMap.Sample(pSamPointWrap, pin.TexC) *2.0f;
-    float width, height;
+    return originalColor;
+    /*float width, height;
     pDepthMap.GetDimensions(width, height);
     float depth = pDepthMap.Load(int3(pin.TexC.x * width, pin.TexC.y * height, 0)).r;
     
@@ -70,7 +71,7 @@ float4 PS(VertexOut pin) : SV_Target
     pSceneMap.GetDimensions(width, height);
     float3 blurredColor = GetBlurColor(pin.TexC, height);
 
-    float blurStart = 0.9; 
+    float blurStart = 0.97; 
     float blurEnd = 0.999;
     float t = saturate((depth - blurStart) / (blurEnd - blurStart));
     float blurFactor = pow(t, 2.0);
@@ -105,7 +106,7 @@ float4 PS(VertexOut pin) : SV_Target
 
     float edgeMagnitude = sqrt(Gx * Gx + Gy * Gy);
 
-    float edgeThreshold = 0.1f; 
+    float edgeThreshold = 0.5f; 
     float edge = step(edgeThreshold, edgeMagnitude); 
     float edgeMask = lerp(1.0 - edge, 1.0, blurFactor);
     float3 finalColor = blurredMixed * edgeMask;
@@ -114,7 +115,7 @@ float4 PS(VertexOut pin) : SV_Target
     float grainIntensity = 0.025;
     finalColor = saturate(finalColor + noise * grainIntensity);
     finalColor *= GetVignette(pin.TexC);
-    return float4(finalColor, 1.0f);
+    return float4(finalColor, 1.0f);*/
 
 
 }

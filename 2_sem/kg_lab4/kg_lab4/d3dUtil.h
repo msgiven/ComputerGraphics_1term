@@ -98,9 +98,9 @@ struct Material {
 	int DiffuseSrvHeapIndex = -1;
 	int NormalSrvHeapIndex = -1;
 	int HeightSrvHeapIndex = -1;
-	std::string DiffuseMapName;
-	std::string NormalMapName;
-	std::string HeightMapName;
+	std::string DiffuseMapName = "";
+	std::string NormalMapName = "";
+	std::string HeightMapName = "";
 	int numFramesDirty = 1;
 	XMFLOAT4 diffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
 	XMFLOAT3 fresnelRO = { 0.1f,0.1f,0.1f };
@@ -180,7 +180,7 @@ struct GBuffer {
 
 
 		D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
-		srvHeapDesc.NumDescriptors = 7;
+		srvHeapDesc.NumDescriptors = 10;
 		srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
 		srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
 		ThrowIfFailed(device->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));

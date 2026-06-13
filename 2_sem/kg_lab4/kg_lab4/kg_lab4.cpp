@@ -10,7 +10,7 @@
 #include <string>
 #include "ModelLoader.h"
 #include "PostProcessing.h"
-
+#include "PBR.h"
 #include <cstdint>
 #include <cstdio>
 #include <limits>
@@ -124,6 +124,7 @@ private:
     ModelLoader* modelLoader;
     GBuffer* mgBuffer;
     PostProcessing* mPostProc;
+    PBR* mPBR;
 
     XMFLOAT3 mSunThetaPhi = { 1.25f * XM_PI, XM_PIDIV4, 0.0f };
 
@@ -174,6 +175,9 @@ private:
     ShadowConstants mShadowCBData;
     std::unique_ptr<UploadBuffer<ShadowConstants>> mShadowCB;
     ComPtr<ID3D12Resource> ShadowMap = nullptr;
+    ComPtr<ID3D12Resource> IntegrationMap = nullptr;
+    ComPtr<ID3D12Resource> IrradianceMap = nullptr;
+    ComPtr<ID3D12Resource> PreFilteredEnvMap = nullptr;
     D3D12_VIEWPORT Viewport{};
     CD3DX12_RECT ScissorRect{};
 
@@ -332,6 +336,8 @@ bool Meow::Initialize()
     BuildDeferredLights();
     BuildShadowMap();
     BuildDisplayPSO();
+
+    mPBR = new PBR(md3dDevice.Get(), mCommandList.Get(), mgBuffer);
 
     mPostProc = new PostProcessing(md3dDevice.Get(), mClientWidth, mClientHeight, mgBuffer);
     BuildPostProcPSO();
@@ -860,6 +866,7 @@ void Meow::Draw(const GameTimer& gt)
 
     mCommandList->SetPipelineState(mShadowPSO.Get());
     mCommandList->SetGraphicsRootSignature(mLightRootSig.Get());
+    mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
     mCommandList->RSSetViewports(1, &Viewport);
     mCommandList->RSSetScissorRects(1, &ScissorRect);
     auto shadowDsv = mShadowDsvHeap->GetCPUDescriptorHandleForHeapStart();
@@ -904,9 +911,13 @@ void Meow::Draw(const GameTimer& gt)
 
             mCommandList->SetGraphicsRootDescriptorTable(0, texHandle);
 
+            mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
+
             mCommandList->SetGraphicsRootConstantBufferView(3,
                 mObjectCB->Resource()->GetGPUVirtualAddress() + ri->ObjCBIndex * objCBByteSize);
             mCommandList->OMSetStencilRef(ri->CastsTexturedShadow ? 1 : 0);
+            mCommandList->SetGraphicsRootConstantBufferView(2, cbAddress);
+            mCommandList->SetGraphicsRootConstantBufferView(4, mMaterialCB->Resource()->GetGPUVirtualAddress() + ri->Mat->matCBIndex * matCBByteSize);
 
             mCommandList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
         }
@@ -1034,7 +1045,8 @@ void Meow::Draw(const GameTimer& gt)
     mCommandList->SetGraphicsRootDescriptorTable(0, mgBuffer->mSrvBaseGpuHandle);
     mCommandList->SetGraphicsRootConstantBufferView(1, mPassCB->Resource()->GetGPUVirtualAddress());
     mCommandList->SetGraphicsRootConstantBufferView(2, mShadowCB->Resource()->GetGPUVirtualAddress());
-
+    mCommandList->SetGraphicsRootConstantBufferView(3, mObjectCB->Resource()->GetGPUVirtualAddress());
+    mCommandList->SetGraphicsRootConstantBufferView(4, mMaterialCB->Resource()->GetGPUVirtualAddress());
     mCommandList->IASetVertexBuffers(0, 0, nullptr);
     mCommandList->IASetIndexBuffer(nullptr);
     mCommandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
@@ -1210,17 +1222,18 @@ void Meow::BuildRootSignature() {
 void Meow::BuildLightRootSignature()
 {
     CD3DX12_DESCRIPTOR_RANGE texTable;
-    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 7, 0);
+    texTable.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 10, 0);
 
-    CD3DX12_ROOT_PARAMETER slotRootParameter[4];
+    CD3DX12_ROOT_PARAMETER slotRootParameter[5];
     slotRootParameter[0].InitAsDescriptorTable(1, &texTable, D3D12_SHADER_VISIBILITY_PIXEL);
     slotRootParameter[1].InitAsConstantBufferView(0);
     slotRootParameter[2].InitAsConstantBufferView(1);
     slotRootParameter[3].InitAsConstantBufferView(2);
+    slotRootParameter[4].InitAsConstantBufferView(3);
 
     auto staticSamplers = GetStaticSamplers();
 
-    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(4, slotRootParameter,
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(5, slotRootParameter,
         (UINT)staticSamplers.size(), staticSamplers.data(),
         D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 

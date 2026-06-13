@@ -23,9 +23,16 @@ Texture2DArray gShadowMap : register(t4);
 Texture2DArray<uint2> gShadowStencilMap : register(t5);
 Texture2D gTexturedShadowMap : register(t6);
 
+TextureCube gIrradianceMap : register(t7);
+TextureCube gPrefilterMap : register(t8); 
+Texture2D gBrdfLUT : register(t9); 
+
 SamplerState gsamPointWrap : register(s0);
+SamplerState gsamLinearWrap : register(s2); 
+SamplerState gsamLinearClamp : register(s3); 
 SamplerState gsamAnisotropicWrap : register(s4);
 SamplerComparisonState gsamBorder : register(s6);
+
 
 cbuffer cbPass : register(b0)
 {
@@ -70,6 +77,15 @@ cbuffer cbPerObject : register(b2)
 {
     float4x4 gWorldViewProj;
     float4x4 gWorld;
+};
+
+cbuffer cbMaterial : register(b3)
+{
+    float4 gDiffuseAlbedo;
+    float3 gFresnelR0;
+    float gRoughness;
+    float4x4 gMatTransform;
+    float gDispScale;
 };
 
 struct ShadowVertexIn
@@ -184,18 +200,17 @@ PostProcessOut PS(VertexOut pin) : SV_Target
     normalW = normalize(normalW);
     float3 toEyeW = normalize(gEyePosW - posW);
 
-    float roughness = 0.5f;
-    float3 fresnelR0 = float3(0.02f, 0.02f, 0.02f);
-    float shininess = 1.0f - roughness;
-    Material mat = { diffuseAlbedo, fresnelR0, shininess };
-    
-    float3 directLightColor = 0.0f;
+    float roughness = 0.5f; 
+    float3 fresnelR0 = gFresnelR0;//float3(0.04f, 0.04f, 0.04f);
+    Material mat = { diffuseAlbedo, fresnelR0, roughness };
 
+    float3 directLightColor = 0.0f;
     uint i = 0;
+    
     for (i = 0; i < gNumDirLights && i < gNumLightsTotal; ++i)
     {
         float4 shadowData = ComputeShadowPCF(posW);
-        float3 baseDirectional = ComputeDirectionalLight(gLights[i], mat, normalW, toEyeW);
+        float3 baseDirectional = 0.5f*ComputeDirectionalLight(gLights[i], mat, normalW, toEyeW);
 
         float3 regularShadowColor = baseDirectional * shadowData.a;
         float3 texturedShadowColor = shadowData.rgb * (1.0f - shadowData.a) * baseDirectional;
@@ -214,10 +229,29 @@ PostProcessOut PS(VertexOut pin) : SV_Target
         directLightColor += ComputeSpotLight(gLights[i], mat, posW, normalW, toEyeW);
     }
 
-    float4 directLight = float4(directLightColor, 0.0f);
-    float4 litColor = (gAmbientLight * diffuseAlbedo) + directLight;
+    float NdotV = max(dot(normalW, toEyeW), 0.0f);
+    float3 R = reflect(-toEyeW, normalW);
+    float3 F_IBL = fresnelSchlickRoughness(NdotV, fresnelR0, roughness);
+    float3 kS_IBL = F_IBL;
+    float3 kD_IBL = 1.0f - kS_IBL;
 
-    litColor.a = diffuseAlbedo.a;
+
+    float3 irradiance = gIrradianceMap.Sample(gsamLinearWrap, normalW).rgb;
+    float3 diffuseIBL = irradiance * diffuseAlbedo.rgb;
+
+    const float MAX_REFLECTION_LOD = 5.0f;
+    float3 R_fixed = R;
+    R_fixed.y = -R.y;
+    float3 prefilteredColor = gPrefilterMap.SampleLevel(gsamLinearWrap, R_fixed, roughness * MAX_REFLECTION_LOD).rgb;
+    float2 brdf = gBrdfLUT.Sample(gsamLinearClamp, float2(NdotV, roughness)).rg;
+    
+    float3 specularIBL = prefilteredColor * (fresnelR0 * brdf.x + brdf.y);
+
+    float3 ambientLight = (kD_IBL * diffuseIBL + specularIBL);
+
+
+    float4 litColor = float4(ambientLight + directLightColor, diffuseAlbedo.a);
+
     postProcOut.Scene = litColor;
     return postProcOut;
 }

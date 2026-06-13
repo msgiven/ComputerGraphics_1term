@@ -166,6 +166,7 @@ std::unique_ptr<MeshGeometry> ModelLoader::LoadModel(ModelInfo& modelInfo) {
         std::string name = modelInfo.matNamePrefix + matName.C_Str() + std::string("_") + std::to_string(i);
 
         auto mat = std::make_unique<Material>();
+        mat->fresnelRO = { 0.04f,0.04f,0.04f };
         mat->name = name;
         mat->matCBIndex = i;
         mat->DiffuseSrvHeapIndex = srvHeapIndex;
@@ -252,6 +253,7 @@ std::unique_ptr<MeshGeometry> ModelLoader::LoadModelWithSpecificTextures(ModelIn
         std::string name = modelInfo.matNamePrefix + matName.C_Str() + std::string("_") + std::to_string(i);
 
         auto mat = std::make_unique<Material>();
+        mat->fresnelRO = { 0.9f,0.9f,0.9f };
         mat->name = name;
         mat->matCBIndex = static_cast<int>(materials.size());
         mat->DiffuseSrvHeapIndex = srvHeapIndex;
@@ -274,6 +276,7 @@ std::unique_ptr<MeshGeometry> ModelLoader::LoadCube(ModelInfo& modelInfo) {
 
     std::string cubeMatName = "CubeMat";
     auto cubeMat = std::make_unique<Material>();
+    cubeMat->fresnelRO = { 0.9f,0.9f,0.9f };
     cubeMat->name = cubeMatName;
     cubeMat->matCBIndex = static_cast<int>(materials.size());
     cubeMat->DiffuseSrvHeapIndex = srvHeapIndex;
